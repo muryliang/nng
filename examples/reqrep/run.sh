@@ -14,7 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-url=tcp://127.0.0.1:40899
-./reqrep node0 $url & node0=$! && sleep 1
-./reqrep node1 $url
-kill $node0
+#url=tcp://127.0.0.1:40899
+#./reqrep node0 $url & node0=$! && sleep 1
+#./reqrep node1 $url
+#kill $node0
+go run slb.pb.go reqrep.go node0 ipc:///tmp/a.ipc

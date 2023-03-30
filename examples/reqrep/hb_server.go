@@ -32,6 +32,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+    "sync"
+    "encoding/json"
 
 	"go.nanomsg.org/mangos/v3"
 	"go.nanomsg.org/mangos/v3/protocol/respondent"
@@ -39,6 +41,11 @@ import (
 
 	// register transports
 	_ "go.nanomsg.org/mangos/v3/transport/all"
+)
+
+const (
+    HB_MAX_FAIL = 3
+    HB_TIMEOUT = 500
 )
 
 func die(format string, v ...interface{}) {
@@ -116,38 +123,98 @@ func server(url string) {
 	var sock mangos.Socket
 	var err error
 	var msg []byte
-    total_cnt := 2
+    var hb_lock sync.Mutex
+    hb_map_fail := map[string]int {
+        "c1" : 0,
+        "c2" : 0,
+        "c3" : 0,
+    }
+    hb_map_onoff := map[string]bool {
+        "c1" : false,
+        "c2" : false,
+        "c3" : false,
+    }
+
+    total_cnt := len(hb_map_onoff)
 	if sock, err = surveyor.NewSocket(); err != nil {
 		die("can't get new surveyor socket: %s", err)
 	}
 	if err = sock.Listen(url); err != nil {
 		die("can't listen on surveyor socket: %s", err.Error())
 	}
-	err = sock.SetOption(mangos.OptionSurveyTime, time.Second*3)
+	err = sock.SetOption(mangos.OptionSurveyTime, time.Millisecond * HB_TIMEOUT)
 	if err != nil {
 		die("SetOption(): %s", err.Error())
 	}
+    i := 0
 	for {
+        tmp_map := map[string]bool {
+            "c1" : false,
+            "c2" : false,
+            "c3" : false,
+        }
         recv_cnt := 0
-        fmt.Println("SERVER: SENDING DATE SURVEY REQUEST")
-        if err = sock.Send([]byte("DATE")); err != nil {
+        changed := false
+
+        i++
+        fmt.Printf("\nserver: sending hb %d\n", i)
+        if err = sock.Send([]byte("hb")); err != nil {
             die("Failed sending survey: %s", err.Error())
         }
+        // currently use this, or we may use client send
+        // pair mode is ok, just client send enough
         for {
             if msg, err = sock.Recv(); err != nil {
                 fmt.Println("get err ", err);
                 break
             }
-            fmt.Printf("SERVER: RECEIVED \"%s\" SURVEY RESPONSE\n",
-                string(msg))
-            recv_cnt ++
-            if recv_cnt == total_cnt {
-                break
+            from_addr := string(msg)
+            mapval, ok := tmp_map[from_addr]
+            if !ok {
+                fmt.Printf("get wrong key %v\n", msg)
+            } else {
+                if !mapval {
+                    tmp_map[from_addr] = true
+                    recv_cnt ++
+                    if recv_cnt == total_cnt {
+                        break
+                    }
+                }
             }
         }
-        fmt.Printf("SERVER: SURVEY OVER with %d vs %d\n", recv_cnt, total_cnt)
+
+        hb_lock.Lock()
+        for addr, onoff := range tmp_map {
+            if !onoff {
+                hb_map_fail[addr] += 1
+                fmt.Printf("%s failed\n", addr)
+                if hb_map_fail[addr] == HB_MAX_FAIL { // when > MAX, already false, not do it
+                    fmt.Printf("%s timeout max, set off\n", addr)
+                    hb_map_onoff[addr] = false
+                    changed = true
+                }
+            } else {
+                hb_map_fail[addr] = 0
+                if hb_map_onoff[addr] == false {
+                    fmt.Printf("%s recovered, set on\n", addr)
+                    hb_map_onoff[addr] = true
+                    changed = true
+                }
+            }
+        }
+        hb_lock.Unlock()
         
-        time.Sleep(time.Second)
+        if changed {
+            fmt.Printf("we changed\n")
+        }
+        res, err := json.MarshalIndent(hb_map_onoff, "", " ")
+        if err != nil {
+            fmt.Println("some error json", err)
+        }
+        fmt.Println(string(res))
+        if recv_cnt == total_cnt {
+            time.Sleep(time.Millisecond * HB_TIMEOUT)
+        }
 	}
 }
 
@@ -159,6 +226,10 @@ func client(url string, name string) {
 	if sock, err = respondent.NewSocket(); err != nil {
 		die("can't get new respondent socket: %s", err.Error())
 	}
+	err = sock.SetOption(mangos.OptionDialAsynch, true)
+	if err != nil {
+		die("SetOption(): %s", err.Error())
+	}
 	if err = sock.Dial(url); err != nil {
 		die("can't dial on respondent socket: %s", err.Error())
 	}
@@ -167,12 +238,11 @@ func client(url string, name string) {
 		if msg, err = sock.Recv(); err != nil {
 			die("Cannot recv: %s", err.Error())
 		}
-		fmt.Printf("CLIENT(%s): RECEIVED \"%s\" SURVEY REQUEST\n",
+		fmt.Printf("client(%s): received \"%s\" survey request\n",
 			name, string(msg))
 
-		d := date()
-		fmt.Printf("CLIENT(%s): SENDING DATE SURVEY RESPONSE\n", name)
-		if err = sock.Send([]byte(d)); err != nil {
+		fmt.Printf("client(%s): responding hb\n", name)
+		if err = sock.Send([]byte(name)); err != nil {
 			die("Cannot send: %s", err.Error())
 		}
 	}

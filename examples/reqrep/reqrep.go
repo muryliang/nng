@@ -29,6 +29,10 @@ import (
 	"fmt"
 	"os"
 	"time"
+    "net"
+    "encoding/binary"
+    "encoding/hex"
+    "bytes"
 
 	"go.nanomsg.org/mangos/v3"
 	"go.nanomsg.org/mangos/v3/protocol/rep"
@@ -36,7 +40,25 @@ import (
 
 	// register transports
 	_ "go.nanomsg.org/mangos/v3/transport/all"
+    "google.golang.org/protobuf/proto"
 )
+
+const (
+    ADD_SA uint32 = iota
+    DEL_SA 
+    STATUS
+)
+
+const (
+    ST_OK int64 = iota
+    ST_FAIL
+
+)
+
+var gmap = map[uint32]string {
+    ADD_SA : "add_sa",
+    DEL_SA : "del_sa",
+}
 
 func die(format string, v ...interface{}) {
 	fmt.Fprintln(os.Stderr, fmt.Sprintf(format, v...))
@@ -57,21 +79,50 @@ func node0(url string) {
 	if err = sock.Listen(url); err != nil {
 		die("can't listen on rep socket: %s", err.Error())
 	}
+    i := 0
 	for {
 		// Could also use sock.RecvMsg to get header
+        i++
 		msg, err = sock.Recv()
 		if err != nil {
 			die("cannot receive on rep socket: %s", err.Error())
 		}
-		if string(msg) == "DATE" { // no need to terminate
-			fmt.Println("NODE0: RECEIVED DATE REQUEST")
-			d := date()
-			fmt.Printf("NODE0: SENDING DATE %s\n", d)
-			err = sock.Send([]byte(d))
-			if err != nil {
-				die("can't send reply: %s", err.Error())
-			}
-		}
+        fmt.Printf("get msg %s\n", hex.EncodeToString(msg))
+        sareq := &AddSaReq{}
+        msglen := int(binary.BigEndian.Uint32(msg[:4]))
+        if msglen != len(msg) {
+            die("msg len not correct %x %d", msglen, len(msg))
+        }
+        op := binary.BigEndian.Uint32(msg[4:8])
+        fmt.Printf("op is %s\n", gmap[op])
+        err := proto.Unmarshal(msg[8:], sareq)
+        if err != nil {
+            die("can not parse received data")
+        }
+        srcip := net.IP(sareq.GetHostSrc())
+        dstip := net.IP(sareq.GetHostDst())
+        fmt.Printf("NODE0: RECEIVED size %d, src:%s, dst:%s, spi:%x\n", len(msg), srcip.String(), dstip.String(), sareq.GetSpi())
+
+        resp := &StatusResp{}
+        resp.Status = ST_FAIL
+
+        buf := new(bytes.Buffer)
+        binary.Write(buf, binary.BigEndian, int32(proto.Size(resp) + 8))
+        binary.Write(buf, binary.BigEndian, int32(STATUS))
+        respmsg, err := proto.Marshal(resp)
+        if err != nil {
+            die("can't marshal : %s", err.Error())
+        }
+        fmt.Printf("before marshal buffer len is %d, msglen %d, protolen %d\n", buf.Len(), len(respmsg), proto.Size(resp))
+        _, err = buf.Write(respmsg)
+        if err != nil {
+            die("can't buf write : %s", err.Error())
+        }
+//        fmt.Printf("%d NODE0: SENDING DATE %s\n", i, d)
+        err = sock.Send(buf.Bytes())
+        if err != nil {
+            die("can't send reply: %s", err.Error())
+        }
 	}
 }
 

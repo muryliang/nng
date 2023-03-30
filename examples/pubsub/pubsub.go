@@ -61,7 +61,7 @@ func server(url string) {
 	}
 	for {
 		// Could also use sock.RecvMsg to get header
-		d := date()
+        d := "date: " + date()
 		fmt.Printf("SERVER: PUBLISHING DATE %s\n", d)
 		if err = sock.Send([]byte(d)); err != nil {
 			die("Failed publishing: %s", err.Error())
@@ -82,7 +82,7 @@ func client(url string, name string) {
 		die("can't dial on sub socket: %s", err.Error())
 	}
 	// Empty byte array effectively subscribes to everything
-	err = sock.SetOption(mangos.OptionSubscribe, []byte(""))
+    err = sock.SetOption(mangos.OptionSubscribe, []byte("date:"))
 	if err != nil {
 		die("cannot subscribe: %s", err.Error())
 	}
