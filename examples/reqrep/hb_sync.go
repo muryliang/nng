@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"os"
 	"time"
-    "strconv"
     "sync"
     "encoding/json"
     "flag"
@@ -27,6 +26,9 @@ import (
     "sync/atomic"
     "errors"
     "net"
+    "encoding/binary"
+    "encoding/hex"
+    "bytes"
 
 	"go.nanomsg.org/mangos/v3"
 	"go.nanomsg.org/mangos/v3/protocol/req"
@@ -36,6 +38,8 @@ import (
 
 	// register transports
 	_ "go.nanomsg.org/mangos/v3/transport/all"
+
+    "google.golang.org/protobuf/proto"
 )
 
 const (
@@ -45,8 +49,28 @@ const (
     HB_INFO = "hb"
     HB_PORT = "22345"
     SYNC_PORT = "22346"
+    CFG_PORT = "22347"
     PROTO = "tcp://"
 )
+
+const (
+    OP_DUMB    uint32 = iota
+    OP_ADD_SA
+    OP_DEL_SA 
+    OP_STATUS
+)
+
+const (
+    ST_OK int64 = iota
+    ST_FAIL
+
+)
+
+var gmap = map[uint32]string {
+    OP_ADD_SA : "add_sa",
+    OP_DEL_SA : "del_sa",
+}
+
 
 type HbTarget struct {
     sock mangos.Socket
@@ -59,7 +83,8 @@ type HbResp struct {
 }
 
 type Config struct {
-    Info string
+    Op      uint32
+    Data    []byte
 }
 
 type VerCfg struct {
@@ -139,6 +164,28 @@ func getMacFromAddr(laddr string) ([]byte, error) {
     return nil, errors.New("not find mac")
 }
 
+func verifyCfgs(showcfgs []VerCfg) error {
+    for _, verCfg := range showcfgs {
+        cfg := verCfg.Cfg
+        op := cfg.Op
+        sareq := &AddSaReq{}
+        if cfg.Op == OP_ADD_SA {
+            err := proto.Unmarshal(cfg.Data, sareq)
+            if err != nil {
+                fmt.Printf("can not parse showcfg")
+                return err
+            }
+            srcip := net.IP(sareq.GetHostSrc())
+            dstip := net.IP(sareq.GetHostDst())
+            tmplsrcip := net.IP(sareq.GetTmplHostSrc())
+            tmpldstip := net.IP(sareq.GetTmplHostDst())
+            spi := sareq.GetSpi()
+            fmt.Printf("cfg client received ver %d, op %s, src:%s, dst:%s,tmplsrc %s, tmpldst %s, spi:0x%x\n", verCfg.Ver, gmap[op], srcip.String(), dstip.String(), tmplsrcip.String(), tmpldstip.String(), spi)
+        }
+    }
+    return nil
+}
+
 func notifyRt() {
     select {
     case rtNotifyCh <- struct{}{}:
@@ -168,16 +215,96 @@ func getCfgNotify() {
 func testGenCfgs() {
     // this 0 is fixed
     var testInterval int32 = 5
-    cfgs = append(cfgs, VerCfg{0, Config{strconv.FormatInt(0, 10)}})
     var i int64
     for i = 1; ; i++ {
         time.Sleep(time.Duration(rand.Int31n(testInterval)) * time.Second)
         cfgLock.Lock()
-        cfgs = append(cfgs, VerCfg{i, Config{strconv.FormatInt(i, 10)}})
+        cfgs = append(cfgs, VerCfg{i, Config{Op:uint32(i)}})
         cfgLock.Unlock()
         fmt.Printf("========= CFG ver %d added =======\n", i)
         notifyCfg()
     }
+}
+
+func recvCfg(laddr string) {
+	var sock mangos.Socket
+	var err error
+	var msg []byte
+    cfgUrl, err := concatString(PROTO, laddr, ":", CFG_PORT)
+    if err != nil {
+        die("can not get cfgurl", err)
+    }
+    fmt.Printf("recvCfg started with url %s\n", cfgUrl)
+	if sock, err = rep.NewSocket(); err != nil {
+		die("can't get new rep socket: %s", err)
+	}
+	if err = sock.Listen(cfgUrl); err != nil {
+		die("can't listen on rep socket: %s", err.Error())
+	}
+    var i int64 = 0
+	for {
+		// Could also use sock.RecvMsg to get header
+		msg, err = sock.Recv()
+		if err != nil {
+			die("cannot receive on cfg socket: %s", err.Error())
+		}
+        fmt.Printf("get msg %s\n", hex.EncodeToString(msg))
+        sareq := &AddSaReq{}
+        msglen := int(binary.BigEndian.Uint32(msg[:4]))
+        if msglen != len(msg) {
+            die("msg len not correct %x %d", msglen, len(msg))
+        }
+        op := binary.BigEndian.Uint32(msg[4:8])
+        fmt.Printf("op is %s\n", gmap[op])
+
+        // do a test unmarshal here, but store in cfg the protobuf only and op
+
+        resp := &StatusResp{}
+        err := proto.Unmarshal(msg[8:], sareq)
+        if err != nil {
+            fmt.Printf("can not parse received data")
+            // what to do at C side when fail??
+            // only network recv error may we send FAIL
+            // and server will remove that newly created ones
+            // update and del should be done first before local netlink
+            resp.Status = ST_FAIL
+        } else {
+            resp.Status = ST_OK
+        }
+        /*
+        srcip := net.IP(sareq.GetHostSrc())
+        dstip := net.IP(sareq.GetHostDst())
+        tmplsrcip := net.IP(sareq.GetTmplHostSrc())
+        tmpldstip := net.IP(sareq.GetTmplHostDst())
+        spi := sareq.GetSpi()
+        fmt.Printf("cfg server received size %d, src:%s, dst:%s,tmplsrc %s, tmpldst %s, spi:%x\n", len(msg), srcip.String(), dstip.String(), tmplsrcip.String(), tmpldstip.String(), spi)
+        */
+
+        buf := new(bytes.Buffer)
+        binary.Write(buf, binary.BigEndian, int32(proto.Size(resp) + 8))
+        binary.Write(buf, binary.BigEndian, int32(OP_STATUS))
+        respmsg, err := proto.Marshal(resp)
+        if err != nil {
+            die("can't marshal : %s", err.Error())
+        }
+        fmt.Printf("before marshal buffer len is %d, msglen %d, protolen %d\n", buf.Len(), len(respmsg), proto.Size(resp))
+        _, err = buf.Write(respmsg)
+        if err != nil {
+            die("can't buf write : %s", err.Error())
+        }
+//        fmt.Printf("%d NODE0: SENDING DATE %s\n", i, d)
+        err = sock.Send(buf.Bytes())
+        if err != nil {
+            die("can't send reply: %s", err.Error())
+        }
+
+        cfgLock.Lock()
+        i++  // first valid msg is 1
+        cfgs = append(cfgs, VerCfg{i, Config{Op:op, Data:msg[8:]}})
+        cfgLock.Unlock()
+        fmt.Printf("========= CFG ver %d added =======\n", i)
+        notifyCfg()
+	}
 }
 
 func router() {
@@ -197,6 +324,10 @@ func router() {
 }
 
 // do syncCfg, use onoffMap{} and []VerCfg
+// todo: currently directly modify xfrm here
+// later we should do this in a second routin
+// and reflect failure in heartbeat, so server
+// will choose another mathine to redirect
 func syncCfg_lbside(serverId uint64) {
     fmt.Printf("syncCfg_lbside started with id %x\n", serverId)
 	var err error
@@ -339,7 +470,7 @@ func syncCfg_subside(laddr string) {
 	}
 
     localcfgs := []VerCfg {
-        VerCfg{0, Config{strconv.FormatInt(0, 10)}},
+        VerCfg{0, Config{Op:0}},
     }
     var curServerId uint64 = 0
 	for {
@@ -373,6 +504,14 @@ func syncCfg_subside(laddr string) {
                 localcfgs = append(localcfgs, cfgs[resp.SyncVer + 1 - startVer:]...)
             }
             fmt.Printf("update ver from %d to %d\n", resp.SyncVer, localcfgs[len(localcfgs)-1].Ver)
+            
+            // show cfg here
+            err = verifyCfgs(cfgs[resp.SyncVer + 1 - startVer:])
+            if err != nil {
+                die("Failed verify cfgs in client: %s", err.Error())
+            }
+
+            // update ver
             resp.SyncVer = localcfgs[len(localcfgs)-1].Ver
         } else {
             fmt.Printf("remain ver as %d\n", resp.SyncVer)
@@ -592,10 +731,15 @@ func main() {
             macMap[server] = nil
         }
         serverId := rand.Uint64()
+
+        // initialize cfg
+        cfgs = append(cfgs, VerCfg{0, Config{Op:OP_DUMB}})
+
         go syncCfg_lbside(serverId)
         go hb_lbside(*localaddr)
         go router()
-        go testGenCfgs()
+//        go testGenCfgs()
+        go recvCfg(*localaddr)
         for {
         }
     } else {
