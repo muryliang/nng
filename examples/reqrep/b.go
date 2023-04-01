@@ -2,6 +2,7 @@ package main
 
 import "flag"
 import "fmt"
+import "net"
 
 type arrayFlags []string
 
@@ -21,4 +22,10 @@ func main() {
     flag.Var(&myFlags, "l", "Some description for this param.")
     flag.Parse()
     fmt.Printf("myFlags :%v:\n", myFlags)
+    intfs, _ := net.Interfaces()
+    for _, intf := range intfs {
+        addrs, _ := intf.Addrs()
+        fmt.Printf("intf %s, mac %s, addrs %v\n", intf.Name, intf.HardwareAddr.String(), addrs)
+    }
+//    fmt.Printf("%v\n", addrs)
 }

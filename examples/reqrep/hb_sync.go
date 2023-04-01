@@ -25,6 +25,8 @@ import (
     "math/rand"
     "strings"
     "sync/atomic"
+    "errors"
+    "net"
 
 	"go.nanomsg.org/mangos/v3"
 	"go.nanomsg.org/mangos/v3/protocol/req"
@@ -41,20 +43,19 @@ const (
     READ_TIMEOUT = 1
     LOOP_TIMEOUT = 1
     HB_INFO = "hb"
+    HB_PORT = "22345"
+    SYNC_PORT = "22346"
+    PROTO = "tcp://"
 )
-
-func die(format string, v ...interface{}) {
-	fmt.Fprintln(os.Stderr, fmt.Sprintf(format, v...))
-	os.Exit(1)
-}
-
-func date() string {
-	return time.Now().Format(time.ANSIC)
-}
 
 type HbTarget struct {
     sock mangos.Socket
     SyncVer int64
+}
+
+type HbResp struct {
+    Addr string
+    Mac  []byte
 }
 
 type Config struct {
@@ -75,15 +76,21 @@ type VerResp struct {
     SyncVer int64
 }
 
-var HB_TIMEOUT = flag.Int("hbtmo", 1000, "heartbeat timeout")
-var hbUrl = flag.String("hburl", "ipc:///tmp/hb.ipc", "heartbeat url")
-var synUrl = flag.String("synurl", "", "for lb, this is comma-seperated list; for subnet, this is just a url string")
+var HB_TIMEOUT = flag.Int("hbtmo", 1000, "heartbeat timeout(ms)")
+var localaddr = flag.String("laddr", "", "local addr xx.xx.xx.xx/mask")
+var localaddrmask = flag.String("laddrmask", "24", "netmask")
 var sub = flag.Bool("sub", false, "subnet machine or not")
+var remoteaddr = flag.String("raddr", "", "remote addr(s) comma seperated")
 
+// onoffmap, used between sync && lb
 var onoffMap map[string]bool = make(map[string]bool)
+var onoffLock sync.Mutex
+
+// macMap, used between router && sync && lb
+var macMap map[string][]byte = make(map[string][]byte)
+var macLock sync.Mutex
 
 var cfgs []VerCfg
-var onoffLock sync.Mutex
 var cfgLock sync.Mutex
 // used for atomic load/store
 var CurSyncVer int64
@@ -91,6 +98,46 @@ var CurSyncVer int64
 var cfgNotifyCh = make(chan struct{}, 1)
 // used when lb or syncCfg decide we need to recalculate
 var rtNotifyCh = make(chan struct{}, 1)
+
+func die(format string, v ...interface{}) {
+	fmt.Fprintln(os.Stderr, fmt.Sprintf(format, v...))
+	os.Exit(1)
+}
+
+func date() string {
+	return time.Now().Format(time.ANSIC)
+}
+
+func concatString(strs ...string) (string, error) {
+    var builder strings.Builder
+    for _, str := range strs {
+        _, err := builder.WriteString(str)
+        if err != nil {
+            return "", err
+        }
+    }
+    return builder.String(), nil
+}
+
+// get mac string from input address format xx.xx.xx.xx/mask
+func getMacFromAddr(laddr string) ([]byte, error) {
+    intfs, err := net.Interfaces()
+    if err != nil {
+        return nil, err
+    }
+    for _, intf := range intfs {
+        addrs, err := intf.Addrs()
+        if err != nil {
+            return nil, err
+        }
+        for _, addr := range addrs {
+            if strings.Split(addr.String(), "/")[0] == laddr {
+                return []byte(intf.HardwareAddr), nil
+            }
+        }
+    }
+    return nil, errors.New("not find mac")
+}
 
 func notifyRt() {
     select {
@@ -120,10 +167,11 @@ func getCfgNotify() {
 
 func testGenCfgs() {
     // this 0 is fixed
+    var testInterval int32 = 5
     cfgs = append(cfgs, VerCfg{0, Config{strconv.FormatInt(0, 10)}})
     var i int64
     for i = 1; ; i++ {
-        time.Sleep(time.Duration(rand.Int31n(10)) * time.Second)
+        time.Sleep(time.Duration(rand.Int31n(testInterval)) * time.Second)
         cfgLock.Lock()
         cfgs = append(cfgs, VerCfg{i, Config{strconv.FormatInt(i, 10)}})
         cfgLock.Unlock()
@@ -177,7 +225,11 @@ func syncCfg_lbside(serverId uint64) {
             if err != nil {
                 die("can't set opt2 for sock: %s", err.Error())
             }
-            if err = syncMap[key].sock.DialOptions(key, options); err != nil {
+            syncUrl, err := concatString(PROTO, key, ":", SYNC_PORT)
+            if err != nil {
+                die("can't get sync url %v", err)
+            }
+            if err = syncMap[key].sock.DialOptions(syncUrl, options); err != nil {
                 die("can't dial on req socket %s: %s", key, err.Error())
             }
         }
@@ -268,16 +320,21 @@ func syncCfg_lbside(serverId uint64) {
 	}
 }
 
-func syncCfg_subside(url string) {
-    fmt.Printf("syncCfg_subside started\n")
+func syncCfg_subside(laddr string) {
 	var sock mangos.Socket
 	var err error
 	var msg []byte
 
+    syncUrl, err := concatString(PROTO, laddr, ":", SYNC_PORT)
+    if err != nil {
+		die("can't get sync url: %v\n", err)
+    }
+    fmt.Printf("syncCfg_subside started with url %s\n", syncUrl)
+
 	if sock, err = rep.NewSocket(); err != nil {
 		die("can't get new rep socket: %s", err)
 	}
-	if err = sock.Listen(url); err != nil {
+	if err = sock.Listen(syncUrl); err != nil {
 		die("can't listen on rep socket: %s", err.Error())
 	}
 
@@ -331,11 +388,16 @@ func syncCfg_subside(url string) {
 }
 
 // do hb check, update onoffMap{}
-func hb_lbside(url string) {
-    fmt.Printf("hb_lbside started\n")
+func hb_lbside(laddr string) {
 	var sock mangos.Socket
 	var err error
 	var msg []byte
+
+    url, err := concatString(PROTO, laddr, ":", HB_PORT)
+    if err != nil {
+        die("can not construct hb url\n")
+    }
+    fmt.Printf("hb_lbside started with url %s\n", url)
     failMap := make(map[string]int)
 
     // initialize fail map
@@ -381,13 +443,24 @@ func hb_lbside(url string) {
                 fmt.Println("get err ", err);
                 break
             }
-            from_addr := string(msg) // client send cfg sync addr here
+            hbresp := HbResp{}
+            err = json.Unmarshal(msg, &hbresp)
+            if err != nil {
+                fmt.Printf("get json err %v, retry\n", err)
+                break;
+            }
+            from_addr := hbresp.Addr // client send cfg sync addr here
+            // we get mac here, then do what? update map of mac, so recvmap should use ip as key, not protocol whole
             mapval, ok := recvMap[from_addr]
             if !ok {
                 fmt.Printf("get wrong key %s\n", string(msg))
             } else {
                 if !mapval {
                     recvMap[from_addr] = true
+                    macLock.Lock()
+                    // update mac
+                    macMap[from_addr] = hbresp.Mac
+                    macLock.Unlock()
                     recv_cnt ++
                     if recv_cnt == total_cnt {
                         break
@@ -449,11 +522,16 @@ func hb_lbside(url string) {
 }
 
 // respmsg is synccfg's connect url
-func hb_subside(dialurl string, hbRespmsg string) {
-    fmt.Printf("hb_subside started\n")
+func hb_subside(laddr string, raddr string) {
 	var sock mangos.Socket
 	var err error
 	var msg []byte
+
+    dialurl, err := concatString(PROTO, raddr, ":", HB_PORT)
+    if err != nil {
+        die("sub can not get hb url\n")
+    }
+    fmt.Printf("hb_subside started\n")
 
 	if sock, err = respondent.NewSocket(); err != nil {
 		die("can't get new respondent socket: %s", err.Error())
@@ -470,13 +548,22 @@ func hb_subside(dialurl string, hbRespmsg string) {
 		if msg, err = sock.Recv(); err != nil {
 			die("Cannot recv: %s", err.Error())
 		}
-		fmt.Printf("client(%s): received \"%s\" \n", hbRespmsg, string(msg))
+		fmt.Printf("client(%s): received \"%s\" \n", laddr, string(msg))
         if string(msg) != HB_INFO {
             die("server hb info not correct")
         }
 
-		fmt.Printf("client: responding hb %s\n", hbRespmsg)
-		if err = sock.Send([]byte(hbRespmsg)); err != nil {
+		fmt.Printf("client: responding hb %s\n", laddr)
+        mac, err := getMacFromAddr(laddr)
+        if err != nil {
+            die("client hb can not get mac")
+        }
+        hbResp := HbResp{Addr: laddr, Mac: mac}
+        sendMsg, err := json.Marshal(hbResp)
+        if err != nil {
+            die("client hb can not marshal")
+        }
+		if err = sock.Send(sendMsg); err != nil {
 			die("Cannot send: %s", err.Error())
 		}
 	}
@@ -491,26 +578,38 @@ func main() {
     // server need hb url(bind), sync's urls for each server(dial)
     // use flag.Var for custom multiple arg, see b.go
     flag.Parse()
+    if *localaddr == "" || *remoteaddr == "" {
+        die("need specify local/remote ip addr here")
+    }
     if !*sub {
-        // lb
-        subservers := strings.Split(*synUrl, ",")
-        fmt.Printf("lb mode hb url %s, subservers %v\n", *hbUrl, subservers)
+        // lb, construct hburl, subservers url here
+        subservers := strings.Split(*remoteaddr, ",")
+        fmt.Printf("lb mode hb addr %s, subservers %v\n", *localaddr, subservers)
 
         // initialize onoffmap
         for _, server := range subservers {
             onoffMap[server] = false
+            macMap[server] = nil
         }
         serverId := rand.Uint64()
         go syncCfg_lbside(serverId)
-        go hb_lbside(*hbUrl)
+        go hb_lbside(*localaddr)
         go router()
         go testGenCfgs()
         for {
         }
     } else {
-        fmt.Printf("sub mode with hb url %s, cfgurl %s\n", *hbUrl, *synUrl)
-        go hb_subside(*hbUrl, *synUrl) 
-        go syncCfg_subside(*synUrl)
+        hbUrl, err := concatString(PROTO, *remoteaddr, ":", HB_PORT)
+        if err != nil {
+            die("sub can not get hb url\n")
+        }
+        synUrl, err := concatString(PROTO, *localaddr, ":", SYNC_PORT)
+        if err != nil {
+            die("can not get sub syn url\n")
+        }
+        fmt.Printf("sub mode with hb url %s, cfgurl %s\n", hbUrl, synUrl)
+        go hb_subside(*localaddr, *remoteaddr) 
+        go syncCfg_subside(*localaddr)
         for {
         }
     }
