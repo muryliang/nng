@@ -1,0 +1,5 @@
+#https://stackoverflow.com/questions/43579838/relationship-between-a-package-statement-and-the-directory-of-a-go-file
+# import path is dirname, but when call func, we use package name, we can make less confuse by match dirname and package name
+server: go run hb_sync.go slb.pb.go -laddr 192.168.122.173 -raddr 192.168.122.173 -hbtmo 1000
+subnet: go run hb_sync.go slb.pb.go -sub -laddr 192.168.122.173 -raddr 192.168.122.173
+C side: cd ccode; ./main_c  tcp://192.168.122.173:22347

@@ -1,0 +1,4 @@
+go generate .
+go run . $args
+
+# net stack: eth->ip->icmp do not forget

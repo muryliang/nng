@@ -40,6 +40,8 @@ import (
 	_ "go.nanomsg.org/mangos/v3/transport/all"
 
     "google.golang.org/protobuf/proto"
+
+    "slb/slbrouter"
 )
 
 const (
@@ -308,6 +310,7 @@ func recvCfg(laddr string) {
 }
 
 func router() {
+    go slbrouter.SlbRouter("eth0")
     fmt.Printf("router started\n")
     var lastSyncVer int64 = 0
     for {
