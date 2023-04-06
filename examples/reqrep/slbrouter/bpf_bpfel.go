@@ -13,6 +13,8 @@ import (
 	"github.com/cilium/ebpf"
 )
 
+type bpfMacaddr struct{ Mac [6]int8 }
+
 // loadBpf returns the embedded CollectionSpec for bpf.
 func loadBpf() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_BpfBytes)
@@ -54,19 +56,14 @@ type bpfSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfProgramSpecs struct {
-	XdpIcmp             *ebpf.ProgramSpec `ebpf:"xdp_icmp"`
-	XdpPass             *ebpf.ProgramSpec `ebpf:"xdp_pass"`
-	XdpPassIg           *ebpf.ProgramSpec `ebpf:"xdp_pass_ig"`
-	XdpRedirectFunc     *ebpf.ProgramSpec `ebpf:"xdp_redirect_func"`
-	XdpRedirectInternal *ebpf.ProgramSpec `ebpf:"xdp_redirect_internal"`
-	XdpShowUdp          *ebpf.ProgramSpec `ebpf:"xdp_show_udp"`
+	XdpPass *ebpf.ProgramSpec `ebpf:"xdp_pass"`
 }
 
 // bpfMapSpecs contains maps before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfMapSpecs struct {
-	Start *ebpf.MapSpec `ebpf:"start"`
+	RedirectMap *ebpf.MapSpec `ebpf:"redirect_map"`
 }
 
 // bpfObjects contains all objects after they have been loaded into the kernel.
@@ -88,12 +85,12 @@ func (o *bpfObjects) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfMaps struct {
-	Start *ebpf.Map `ebpf:"start"`
+	RedirectMap *ebpf.Map `ebpf:"redirect_map"`
 }
 
 func (m *bpfMaps) Close() error {
 	return _BpfClose(
-		m.Start,
+		m.RedirectMap,
 	)
 }
 
@@ -101,22 +98,12 @@ func (m *bpfMaps) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfPrograms struct {
-	XdpIcmp             *ebpf.Program `ebpf:"xdp_icmp"`
-	XdpPass             *ebpf.Program `ebpf:"xdp_pass"`
-	XdpPassIg           *ebpf.Program `ebpf:"xdp_pass_ig"`
-	XdpRedirectFunc     *ebpf.Program `ebpf:"xdp_redirect_func"`
-	XdpRedirectInternal *ebpf.Program `ebpf:"xdp_redirect_internal"`
-	XdpShowUdp          *ebpf.Program `ebpf:"xdp_show_udp"`
+	XdpPass *ebpf.Program `ebpf:"xdp_pass"`
 }
 
 func (p *bpfPrograms) Close() error {
 	return _BpfClose(
-		p.XdpIcmp,
 		p.XdpPass,
-		p.XdpPassIg,
-		p.XdpRedirectFunc,
-		p.XdpRedirectInternal,
-		p.XdpShowUdp,
 	)
 }
 

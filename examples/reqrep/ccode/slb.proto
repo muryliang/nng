@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package slb;
 
-option go_package = "./main";
+option go_package = "/slbproto";
 
 // todo: new_sa() may call netlink UPDATE_SA, but update_sa()
 // just call del() and new() sa

@@ -11,19 +11,21 @@
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
+struct macaddr {
+    char mac[ETH_ALEN];
+};
+
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, 1024);
-	__type(key, __u32);
-	__type(value, __u32);
-} start SEC(".maps");
+	__type(key, __u64);
+	__type(value, struct macaddr);
+} redirect_map SEC(".maps");
 
-int my_pid = 0;
 
 SEC("xdp")
 int xdp_pass(struct xdp_md *ctx) {
 	int action = XDP_PASS;
-#if 1
 	void *data     = (void *)(long)ctx->data;
 	void *data_end = (void *)(long)ctx->data_end;
 	struct ethhdr *eth;
@@ -32,24 +34,15 @@ int xdp_pass(struct xdp_md *ctx) {
 	int eth_type;
     int ip_type;
 
-	nh.pos   = data;
+	nh.pos = data;
 	eth_type = parse_ethhdr(&nh, data_end, &eth);
 	if (bpf_ntohs(eth_type) != ETH_P_IP) {
 		goto out;
     }
     ip_type = parse_iphdr(&nh, data_end, &iphdr);
-    if (ip_type != IPPROTO_ICMP)
+    if (ip_type != IPPROTO_ICMP) {
         goto out;
-
-		/*
-		char ethin[64]  = {0};
-		char ethout[64] = {0};
-		BPF_SNPRINTF(ethin, sizeof(ethin), "%02x:%02x:%02x:%02x:%02x:%02x", eth->h_source[0], eth->h_source[1], eth->h_source[2], eth->h_source[3], eth->h_source[4], eth->h_source[5]);
-		BPF_SNPRINTF(ethout, sizeof(ethout), "%02x:%02x:%02x:%02x:%02x:%02x", eth->h_dest[0], eth->h_dest[1], eth->h_dest[2], eth->h_dest[3], eth->h_dest[4], eth->h_dest[5]);
-
-		bpf_printk("packet size: in %d dst %s  src %s", ctx->ingress_ifindex, ethout, ethin);
-		*/
-#endif
+    }
 
 	int icmp_type;
 	struct icmphdr_common *icmphdr;
@@ -58,29 +51,23 @@ int xdp_pass(struct xdp_md *ctx) {
 		goto out;
 	}
 
-	int key = 10;
-	int *rec;
-	rec = bpf_map_lookup_elem(&start, &key);
+	struct macaddr *rec;
+    // combine saddr and daddr as key for internal redirect
+    __u64 key = (__u64)iphdr->saddr << 32 | (__u64)iphdr->daddr;
+	rec = bpf_map_lookup_elem(&redirect_map, &key);
 	if (!rec) {
 		bpf_printk("null kookup\n");
 		action = XDP_ABORTED;
 		goto out;
 	}
-	if (*rec == 1) {
-		bpf_printk("drop\n");
-		action = XDP_DROP;
-	} else if (*rec == 2) {
-		bpf_printk("accept\n");
-		action = XDP_PASS;
-	} else {
-		bpf_printk("unknown rec %d\n", *rec);
-		action = XDP_ABORTED;
-	}
+    bpf_printk("redir icmp package from %x %x\n", eth->h_source[0], eth->h_source[5]);
+    bpf_printk("redir icmp package to %x %x\n", rec->mac[0], rec->mac[5]);
+    action = XDP_DROP;
 out:
 	return action;
 }
 
-#if 1
+#if 0
 SEC("xdp")
 int xdp_pass_ig(struct xdp_md *ctx) {
 	return XDP_PASS;
