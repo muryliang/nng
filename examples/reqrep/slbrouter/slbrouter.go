@@ -10,7 +10,6 @@ package slbrouter
 
 import (
 	"fmt"
-	"log"
 	"net"
     "bytes"
     "encoding/binary"
@@ -61,6 +60,22 @@ type SlbRouter struct {
     xdplink link.Link
 }
 
+func (r *SlbRouter) adjustTopo(newMap map[string][]byte, onoffMap map[string][]byte, maclist []string) {
+    for key, val := range r.curMap {
+        if v, ok := onoffMap[key]; ok {
+            if v == nil { // key in range and is off
+                hashres := util.HashFromBytes([]byte(key), len(maclist))
+                newMap[key] = onoffMap[maclist[hashres]]
+            } else {
+            // key in range and on
+                newMap[key] = val
+            }
+        } else { // key not in range, just add
+            newMap[key] = val
+        }
+    }
+}
+
 // todo: we may should not lock onoffmap for so long, just copy a duplicate for use
 // we may use alg func callback here, but currently only
 // rr supported, so every time recalculate
@@ -83,12 +98,11 @@ func (r *SlbRouter) recalMap(cfgs []config.VerCfg, onoffMap map[string][]byte) (
             maclist = append(maclist, key)
         }
     }
-    // copy map first
+    // copy map, and adjust for topo change here
     newMap := make(map[string][]byte)
-    for key, val := range r.curMap {
-        newMap[key] = val
-    }
+    r.adjustTopo(newMap, onoffMap, maclist)
 
+    // apply new vercfgs here
     // todo parse req, use seperate class
     for _, vercfg := range cfgs {
         cfg := vercfg.Cfg
@@ -160,7 +174,6 @@ func (r *SlbRouter) RecalAndInstall(cfgs []config.VerCfg, onoffMap map[string][]
                 fmt.Printf("delete %s error %v\n", k, err)
             }
         }
-
     }
 
     // do new add stuff
@@ -205,14 +218,14 @@ func (r *SlbRouter) Init() error {
     return nil
 }
 
-func (r *SlbRouter) Run() {
+func (r *SlbRouter) Run() error {
 
     var err error
 
     // load xdp program
 	// Load pre-compiled programs into the kernel.
 	if err := loadBpfObjects(&r.xdpobjs, nil); err != nil {
-		log.Fatalf("loading objects: %s", err)
+		fmt.Printf("loading objects: %s", err)
 	}
 //	defer objs.Close()
 
@@ -223,11 +236,13 @@ func (r *SlbRouter) Run() {
 		Interface: r.InnerIntf.Index,
 	})
 	if err != nil {
-		log.Fatalf("could not attach XDP program: %s", err)
+		fmt.Printf("could not attach XDP program: %s", err)
+        return err
 	}
 //	defer l.Close()
 
-	log.Printf("Attached XDP program to inner iface %q (index %d)", r.InnerIntf.Name, r.InnerIntf.Index)
+	fmt.Printf("Attached XDP program to inner iface %q (index %d)", r.InnerIntf.Name, r.InnerIntf.Index)
+    return nil
 
 }
 

@@ -273,7 +273,10 @@ func doRouter(innerIP string, outerIP string) {
     if err != nil {
         die("router Init failed with error %v", err)
     }
-    go router.Run()
+    err = router.Run()
+    if err != nil {
+        die("router Run failed with error %v", err)
+    }
 
     fmt.Printf("router started\n")
     var lastSyncVer int64 = 0
@@ -287,6 +290,9 @@ func doRouter(innerIP string, outerIP string) {
         } else {
             fmt.Printf("router: only map topo changed\n")
         }
+
+        // if map changed, we need recalculate, so recal and cal topo change
+        // if cfg update, we need recalculate also, so recal also
         
         // create a copy, so we will not block other route who access config and map
         onoffLock.Lock()
@@ -301,6 +307,7 @@ func doRouter(innerIP string, outerIP string) {
         cfgLock.Unlock()
 
         lastSyncVer = curVer
+        fmt.Printf("========== do recal and install \n")
         err = router.RecalAndInstall(installCfgs, copyOnoffMap)
         if err != nil {
             die("router failed with error %v", err)
