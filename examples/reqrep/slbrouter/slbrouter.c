@@ -57,7 +57,7 @@ int xdp_pass(struct xdp_md *ctx) {
 	rec = bpf_map_lookup_elem(&redirect_map, &key);
 	if (!rec) {
 		bpf_printk("null kookup\n");
-		action = XDP_ABORTED;
+//		action = XDP_ABORTED;
 		goto out;
 	}
     bpf_printk("redir icmp package from %x %x\n", eth->h_source[0], eth->h_source[5]);

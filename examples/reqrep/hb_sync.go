@@ -711,10 +711,10 @@ func main() {
     // server need hb url(bind), sync's urls for each server(dial)
     // use flag.Var for custom multiple arg, see b.go
     flag.Parse()
-    if *localaddr == "" || *remoteaddr == "" {
-        die("need specify local/remote ip addr here")
-    }
     if !*sub {
+        if *localaddr == "" || *remoteaddr == "" {
+            die("need specify local/remote ip addr here")
+        }
         // lb, construct hburl, subservers url here
         subservers := strings.Split(*remoteaddr, ",")
         fmt.Printf("lb mode hb addr %s, subservers %v\n", *localaddr, subservers)
