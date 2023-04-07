@@ -150,7 +150,7 @@ out:
 }
 
 SEC("xdp")
-int xdp_redirect_func(struct xdp_md *ctx) {
+int xdp_redirect_outer(struct xdp_md *ctx) {
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data     = (void *)(long)ctx->data;
 	struct hdr_cursor nh;
@@ -172,19 +172,23 @@ int xdp_redirect_func(struct xdp_md *ctx) {
 	if (eth_type != bpf_htons(ETH_P_IP)) {
 		goto out;
 	}
-	ip_type = parse_iphdr(&nh, data_end, &iphdr);
-	// inside ip, we may see udp(esp) or udp(marker(ike))
-	// or just raw esp
-	unsigned char modify_dst11[ETH_ALEN] = {0xc2, 0xeb, 0xea, 0xec, 0xa5, 0x4d};
-	unsigned char modify_dst12[ETH_ALEN] = {0x5a, 0x8e, 0xf4, 0x11, 0xe0, 0xf5};
-	unsigned char *modify_dst            = NULL;
-	unsigned char local_dst[ETH_ALEN]    = {0xe2, 0x9d, 0xd3, 0xa9, 0x18, 0x9f};
+
+    // get local mac 
+	struct macaddr *local_mac_rec;
+    __u32 local_mac_key = OUTER_INDEX;
+	local_mac_rec = bpf_map_lookup_elem(&mac_arr, &local_mac_key);
+	if (!local_mac_rec) {
+		bpf_printk("no outer local mac found\n");
+		goto out;
+	}
 
 	for (i = 0; i < ETH_ALEN; i++) {
-		if (eth->h_dest[i] != local_dst[i]) {
+		if (eth->h_dest[i] != local_mac_rec->mac[i]) {
 			goto out;
 		}
 	}
+
+	ip_type = parse_iphdr(&nh, data_end, &iphdr);
 
 	// we have udp or esp here
 	if (ip_type == IPPROTO_UDP) {
@@ -197,7 +201,10 @@ int xdp_redirect_func(struct xdp_md *ctx) {
 		if (nh.pos + 4 > data_end) {
 			goto out;
 		}
-		if (bpf_ntohs(udphdr->source) != 4500 || bpf_ntohs(udphdr->dest) != 4500 || *(int *)nh.pos == 0) {
+//		if (bpf_ntohs(udphdr->source) != 4500 || bpf_ntohs(udphdr->dest) != 4500 || *(int *)nh.pos == 0) {
+//		source may not be 4500 if remote sit behind nat
+//		for espinudp, packet must be 4500 udp port + first 4 byte not zero
+		if (bpf_ntohs(udphdr->dest) != 4500 || *(int *)nh.pos == 0) {
 			goto out;
 		}
 		nh.pos += 4;
@@ -212,24 +219,20 @@ int xdp_redirect_func(struct xdp_md *ctx) {
 	if ((void *)(esphdr + 1) > data_end) {
 		goto out;
 	}
-	int spi = bpf_ntohl(esphdr->spi);
-	if (spi == 0x1 || spi == 0x2) {
-		modify_dst = modify_dst11;
-		bpf_printk("esp forward to 11\n");
-	} else if (spi == 0x3 || spi == 0x4) {
-		modify_dst = modify_dst12;
-		bpf_printk("esp forward to 12\n");
-	} else {
-		bpf_printk("unknown spi for test %d\n", spi);
+    struct macaddr *redir_mac_rec;
+    __u64 redir_key = (__u64)esphdr->spi << 32 | (__u64)0;
+
+	redir_mac_rec = bpf_map_lookup_elem(&redirect_map, &redir_key);
+	if (!redir_mac_rec) {
 		goto out;
 	}
 
 	// only redirect esp package
-	__builtin_memcpy(eth->h_dest, modify_dst, ETH_ALEN);
-	__builtin_memcpy(eth->h_source, local_dst, ETH_ALEN);
+	__builtin_memcpy(eth->h_dest, redir_mac_rec->mac, ETH_ALEN);
+	__builtin_memcpy(eth->h_source, local_mac_rec->mac, ETH_ALEN);
 	//	action = bpf_redirect(ifindex, 0);
 	action = XDP_TX;
-	//    bpf_printk("esp redirected ifindex %d", ctx->ingress_ifindex);
+	bpf_printk("esp redirected spi 0x%x\n", bpf_ntohl(esphdr->spi));
 
 out:
 	return action;
@@ -237,7 +240,7 @@ out:
 
 // redirect internal packet for inner_vip
 SEC("xdp")
-int xdp_redirect_internal(struct xdp_md *ctx) {
+int xdp_redirect_inner(struct xdp_md *ctx) {
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data     = (void *)(long)ctx->data;
 	struct hdr_cursor nh;
@@ -257,17 +260,25 @@ int xdp_redirect_internal(struct xdp_md *ctx) {
 	if (eth_type != bpf_htons(ETH_P_IP)) {
 		goto out;
 	}
-	ip_type = parse_iphdr(&nh, data_end, &iphdr);
-	if (ip_type == -1) {
-		goto out;
-	}
 
     // get local mac 
 	struct macaddr *local_mac_rec;
-    __u32 local_mac_key = INNER_INDEX;
+    __u32 local_mac_key = OUTER_INDEX;
 	local_mac_rec = bpf_map_lookup_elem(&mac_arr, &local_mac_key);
 	if (!local_mac_rec) {
-		bpf_printk("no inner local mac found\n");
+		bpf_printk("no outer local mac found\n");
+		goto out;
+	}
+
+    int i;
+	for (i = 0; i < ETH_ALEN; i++) {
+		if (eth->h_dest[i] != local_mac_rec->mac[i]) {
+			goto out;
+		}
+	}
+
+	ip_type = parse_iphdr(&nh, data_end, &iphdr);
+	if (ip_type == -1) {
 		goto out;
 	}
 
@@ -279,11 +290,12 @@ int xdp_redirect_internal(struct xdp_md *ctx) {
 	if (!redir_mac_rec) {
 		goto out;
 	}
+
 	__builtin_memcpy(eth->h_source, local_mac_rec->mac, ETH_ALEN);
 	__builtin_memcpy(eth->h_dest, redir_mac_rec->mac, ETH_ALEN);
 
 	action = XDP_TX;
-	bpf_printk("subnet redirected ifindex %d", ctx->ingress_ifindex);
+	bpf_printk("subnet redirected src 0x%x, dst 0x%x\n", iphdr->saddr, iphdr->daddr);
 
 out:
 	return action;

@@ -56,12 +56,12 @@ type bpfSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfProgramSpecs struct {
-	XdpIcmp             *ebpf.ProgramSpec `ebpf:"xdp_icmp"`
-	XdpPassIg           *ebpf.ProgramSpec `ebpf:"xdp_pass_ig"`
-	XdpPassTest         *ebpf.ProgramSpec `ebpf:"xdp_pass_test"`
-	XdpRedirectFunc     *ebpf.ProgramSpec `ebpf:"xdp_redirect_func"`
-	XdpRedirectInternal *ebpf.ProgramSpec `ebpf:"xdp_redirect_internal"`
-	XdpShowUdp          *ebpf.ProgramSpec `ebpf:"xdp_show_udp"`
+	XdpIcmp          *ebpf.ProgramSpec `ebpf:"xdp_icmp"`
+	XdpPassIg        *ebpf.ProgramSpec `ebpf:"xdp_pass_ig"`
+	XdpPassTest      *ebpf.ProgramSpec `ebpf:"xdp_pass_test"`
+	XdpRedirectInner *ebpf.ProgramSpec `ebpf:"xdp_redirect_inner"`
+	XdpRedirectOuter *ebpf.ProgramSpec `ebpf:"xdp_redirect_outer"`
+	XdpShowUdp       *ebpf.ProgramSpec `ebpf:"xdp_show_udp"`
 }
 
 // bpfMapSpecs contains maps before they are loaded into the kernel.
@@ -106,12 +106,12 @@ func (m *bpfMaps) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfPrograms struct {
-	XdpIcmp             *ebpf.Program `ebpf:"xdp_icmp"`
-	XdpPassIg           *ebpf.Program `ebpf:"xdp_pass_ig"`
-	XdpPassTest         *ebpf.Program `ebpf:"xdp_pass_test"`
-	XdpRedirectFunc     *ebpf.Program `ebpf:"xdp_redirect_func"`
-	XdpRedirectInternal *ebpf.Program `ebpf:"xdp_redirect_internal"`
-	XdpShowUdp          *ebpf.Program `ebpf:"xdp_show_udp"`
+	XdpIcmp          *ebpf.Program `ebpf:"xdp_icmp"`
+	XdpPassIg        *ebpf.Program `ebpf:"xdp_pass_ig"`
+	XdpPassTest      *ebpf.Program `ebpf:"xdp_pass_test"`
+	XdpRedirectInner *ebpf.Program `ebpf:"xdp_redirect_inner"`
+	XdpRedirectOuter *ebpf.Program `ebpf:"xdp_redirect_outer"`
+	XdpShowUdp       *ebpf.Program `ebpf:"xdp_show_udp"`
 }
 
 func (p *bpfPrograms) Close() error {
@@ -119,8 +119,8 @@ func (p *bpfPrograms) Close() error {
 		p.XdpIcmp,
 		p.XdpPassIg,
 		p.XdpPassTest,
-		p.XdpRedirectFunc,
-		p.XdpRedirectInternal,
+		p.XdpRedirectInner,
+		p.XdpRedirectOuter,
 		p.XdpShowUdp,
 	)
 }

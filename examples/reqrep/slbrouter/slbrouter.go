@@ -59,7 +59,8 @@ type SlbRouter struct {
 //    innerNewMap map[string][]byte
 
     xdpobjs bpfObjects
-    xdplink link.Link
+    xdplinkInner link.Link
+    xdplinkOuter link.Link
 }
 
 var MAC_DUMB []byte  = []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
@@ -290,19 +291,27 @@ func (r *SlbRouter) Run() error {
 	}
 //	defer objs.Close()
 
-// todo: we only test inner now
-// and if internal and outer are the same, we combine two functions
+// todo: if internal and outer are the same, we combine two functions
 	// Attach the program.
-	r.xdplink, err = link.AttachXDP(link.XDPOptions{
-		Program:   r.xdpobjs.XdpRedirectInternal,
+	r.xdplinkInner, err = link.AttachXDP(link.XDPOptions{
+		Program:   r.xdpobjs.XdpRedirectInner,
 		Interface: r.InnerIntf.Index,
 	})
 	if err != nil {
-		fmt.Printf("could not attach XDP program: %s\n", err)
+		fmt.Printf("could not attach XDP program inner: %s\n", err)
+        return err
+	}
+	r.xdplinkOuter, err = link.AttachXDP(link.XDPOptions{
+		Program:   r.xdpobjs.XdpRedirectOuter,
+		Interface: r.OuterIntf.Index,
+	})
+	if err != nil {
+		fmt.Printf("could not attach XDP program outer: %s\n", err)
         return err
 	}
 //	defer l.Close()
 
+// map is shared between all progs in one obj
     err = r.xdpobjs.MacArr.Put(&INNER_VIP_INDEX, &r.InnerIntf.HardwareAddr)
     if err != nil {
         fmt.Printf("failed to set inner hwaddr")
