@@ -64,6 +64,7 @@ type SlbRouter struct {
 
 var MAC_DUMB []byte  = []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
 
+// check currently ON maclist, and adjust configured ones
 func (r *SlbRouter) adjustTopo(newMap map[[8]byte][]byte, onoffMap map[string][]byte, maclist [][]byte) {
     // topo change, some addr is off
     // if not found that mac in maclist
@@ -111,9 +112,6 @@ func (r *SlbRouter) recalMap(cfgs []config.VerCfg, onoffMap map[string][]byte) (
     }
     // copy map
     newMap := make(map[[8]byte][]byte)
-    if len(maclist) == 0 {
-        return r.curMap, nil, nil
-    }
 
     // first adjust without cfg changes
     r.adjustTopo(newMap, onoffMap, maclist)
@@ -148,14 +146,14 @@ func (r *SlbRouter) recalMap(cfgs []config.VerCfg, onoffMap map[string][]byte) (
                 // key is {innersrcip,innerdstip}
                 hashkeybytes := sareq.GetHostSrc()
                 hashkeybytes = append(hashkeybytes, sareq.GetHostDst()...)
-                hashres := util.HashFromBytes(hashkeybytes, len(maclist))
                 // use hash as index to get onoffmap's key, then reterieve its mac addr
                 if len(maclist) == 0 {
                     newMap[([8]byte)(hashkeybytes)] = MAC_DUMB
                 } else {
+                    hashres := util.HashFromBytes(hashkeybytes, len(maclist))
                     newMap[([8]byte)(hashkeybytes)] = maclist[hashres]
-                    r.spiMap[sareq.GetSpi()] = ipsecInfo{key:([8]byte)(hashkeybytes)}
                 }
+                r.spiMap[sareq.GetSpi()] = ipsecInfo{key:([8]byte)(hashkeybytes)}
 
             } else {
                 return nil, nil, errors.New("addreq's src/dst not us")
@@ -170,6 +168,8 @@ func (r *SlbRouter) recalMap(cfgs []config.VerCfg, onoffMap map[string][]byte) (
             if hashkeybytes, ok := r.spiMap[spi]; ok {
                 delete(newMap, hashkeybytes.key) 
                 delete(r.spiMap, spi)
+            } else {
+                fmt.Printf("spi %x not exist\n", spi)
             }
         }
     }
@@ -205,6 +205,7 @@ func (r *SlbRouter) RecalAndInstall(cfgs []config.VerCfg, onoffMap map[string][]
     // todo: currently not handle xdp map put error
     // when error, we should clear all map and unload router, only
     // need update curmap !
+    fmt.Printf("in recal install map is %#v\n", onoffMap)
     curmap, newmap, err := r.recalMap(cfgs, onoffMap)
     if err != nil {
         return err
@@ -216,7 +217,7 @@ func (r *SlbRouter) RecalAndInstall(cfgs []config.VerCfg, onoffMap map[string][]
     // for old not in new: delete
     for k, macaddr := range curmap {
         if _, ok := newmap[k]; !ok {
-            fmt.Printf("delete %s:%v\n", k, macaddr)
+            fmt.Printf("delete %#v:%#v\n", k, macaddr)
             delete(curmap, k)
             err = r.xdpobjs.RedirectMap.Delete(&k)
             if err != nil {
@@ -228,7 +229,9 @@ func (r *SlbRouter) RecalAndInstall(cfgs []config.VerCfg, onoffMap map[string][]
     // do new add stuff
     for k, macaddr := range newmap {
         if bytes.Equal(macaddr, MAC_DUMB) {
-            fmt.Printf("skip adding for key %#v\n", k)
+            fmt.Printf("skip adding xdp for key %#v\n", k)
+            // may not exist
+            _ = r.xdpobjs.RedirectMap.Delete(&k)
         } else {
             origV, ok := curmap[k]
             if !ok {
@@ -305,7 +308,7 @@ func (r *SlbRouter) Run() error {
 func formatMapContents(m *ebpf.Map) (string, error) {
 	var (
 		sb  strings.Builder
-		key [6]byte
+		key [8]byte
 		val [6]byte
 	)
 	iter := m.Iterate()

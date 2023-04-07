@@ -423,7 +423,7 @@ func syncCfg_lbside(serverId uint64) {
                     recvmsg, err := tgt.sock.Recv()
                     if err == mangos.ErrRecvTimeout {
                         fmt.Printf("%s timeout\n", remote)
-                        return
+                        continue // keep trying until off
                     }
                     if err != nil {
                         die("Cannot recv: %s", err.Error())
@@ -504,17 +504,19 @@ func syncCfg_subside(laddr string) {
             if resp.SyncVer + 1 >= startVer &&
                     resp.SyncVer < endVer {
                 localcfgs = append(localcfgs, cfgs[resp.SyncVer + 1 - startVer:]...)
+                err = verifyCfgs(cfgs[resp.SyncVer + 1 - startVer:])
+                if err != nil {
+                    die("Failed verify cfgs in client: %s", err.Error())
+                }
+                fmt.Printf("update ver from %d to %d\n", resp.SyncVer, localcfgs[len(localcfgs)-1].Ver)
+                resp.SyncVer = localcfgs[len(localcfgs)-1].Ver
+            } else {
+                fmt.Printf("remain ver as %d\n", resp.SyncVer)
             }
-            fmt.Printf("update ver from %d to %d\n", resp.SyncVer, localcfgs[len(localcfgs)-1].Ver)
             
             // show cfg here
-            err = verifyCfgs(cfgs[resp.SyncVer + 1 - startVer:])
-            if err != nil {
-                die("Failed verify cfgs in client: %s", err.Error())
-            }
 
             // update ver
-            resp.SyncVer = localcfgs[len(localcfgs)-1].Ver
         } else {
             fmt.Printf("remain ver as %d\n", resp.SyncVer)
         }
@@ -645,8 +647,7 @@ func hb_lbside(laddr string) {
         if changed {
             fmt.Printf("we changed, recalculate hash here\n")
             // nonblocking echo
-            notifyRt()
-            notifyCfg() // map changed, we need send at least one cfgreq to pushd cfg
+            notifyCfg() // map changed, we need send at least one cfgreq to pushd cfg, and it will do notifyRt() for us
             // client side can control hb response when sync cfg failed some time, retire and warn to hb when needed
             // only update hash when we finish sync, so how
         }

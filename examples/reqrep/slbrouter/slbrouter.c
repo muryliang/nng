@@ -53,6 +53,8 @@ int xdp_pass(struct xdp_md *ctx) {
 
 	struct macaddr *rec;
     // combine saddr and daddr as key for internal redirect
+    // this is for test internal, on little endian machine like this
+    // local is lower bit, remote is upper bit
     __u64 key = (__u64)iphdr->saddr << 32 | (__u64)iphdr->daddr;
 	rec = bpf_map_lookup_elem(&redirect_map, &key);
 	if (!rec) {
