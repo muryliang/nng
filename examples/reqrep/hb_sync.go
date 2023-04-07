@@ -296,40 +296,19 @@ func doRouter(innerIP string, outerIP string) {
         } else if lastSyncVer == curVer {
             fmt.Printf("router: only map topo changed\n")
         } else {
-            // last > cur, so delete first, then do again
-            lastSyncVer = 0
-            err = router.DeleteAll()
-            if err != nil {
-                die("router failed with error %v", err)
-            }
-            // do again here for adding from startup
-            notifyRt()
-            continue
+            die("router failed with error %d > %d", lastSyncVer, curVer)
         }
 
         // if map changed, we need recalculate, so recal and cal topo change
         // if cfg update, we need recalculate also, so recal also
         
         // create a copy, so we will not block other route who access config and map
-        is_on := false
         onoffLock.Lock()
         copyOnoffMap := make(map[string][]byte)
         for k, v := range onoffMap {
             copyOnoffMap[k] = v
-            if v != nil {
-                is_on = true
-            }
         }
         onoffLock.Unlock()
-        if !is_on {
-            lastSyncVer = 0
-            err = router.DeleteAll()
-            if err != nil {
-                die("router failed with error %v", err)
-            }
-            continue
-        }
-
 
         // if all sub down, we should delete all maps
         // if at least on is up, we can recal and install
@@ -398,8 +377,6 @@ func syncCfg_lbside(serverId uint64) {
         curCfgs := cfgs[:]
         cfgLock.Unlock()
 
-        var upMachine int64 = 0
-
         var wg sync.WaitGroup
         wg.Add(len(syncMap))
         for addr, target := range syncMap {
@@ -463,20 +440,14 @@ func syncCfg_lbside(serverId uint64) {
 
                     if tgt.SyncVer == curLastVer {
                     // test equal here, not start of for, because we need at least one cycle to know if submachine is ok or during a quick stop and start
-                        atomic.AddInt64(&upMachine, 1)
                         break
                     }
                 }
             }(addr, target)
         }
         wg.Wait()
-        // when at least one up, we continue update ver, todo: maybe store onoffmap copy here in atomic, together with ver
-        // when all is down, we should set ver to 0, then router know to delete all
-        if atomic.LoadInt64(&upMachine) == 0 {
-            atomic.StoreInt64(&CurSyncVer, 0)
-        } else {
-            atomic.StoreInt64(&CurSyncVer, curCfgs[len(curCfgs)-1].Ver)
-        }
+
+        atomic.StoreInt64(&CurSyncVer, curCfgs[len(curCfgs)-1].Ver)
         notifyRt()
         fmt.Printf("loop done\n")
 	}

@@ -62,6 +62,8 @@ type SlbRouter struct {
     xdplink link.Link
 }
 
+var MAC_DUMB []byte  = []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+
 func (r *SlbRouter) adjustTopo(newMap map[[8]byte][]byte, onoffMap map[string][]byte, maclist [][]byte) {
     // topo change, some addr is off
     // if not found that mac in maclist
@@ -75,8 +77,12 @@ func (r *SlbRouter) adjustTopo(newMap map[[8]byte][]byte, onoffMap map[string][]
             }
         }
         if !exist {
-            hashres := util.HashFromBytes(key[:], len(maclist))
-            newMap[key] = maclist[hashres]
+            if len(maclist) == 0 {
+                newMap[key] = MAC_DUMB
+            } else {
+                hashres := util.HashFromBytes(key[:], len(maclist))
+                newMap[key] = maclist[hashres]
+            }
         }
     }
 }
@@ -103,11 +109,13 @@ func (r *SlbRouter) recalMap(cfgs []config.VerCfg, onoffMap map[string][]byte) (
             maclist = append(maclist, val)
         }
     }
-    // copy map, and adjust for topo change here
+    // copy map
     newMap := make(map[[8]byte][]byte)
     if len(maclist) == 0 {
         return r.curMap, nil, nil
     }
+
+    // first adjust without cfg changes
     r.adjustTopo(newMap, onoffMap, maclist)
 
     // apply new vercfgs here
@@ -128,8 +136,12 @@ func (r *SlbRouter) recalMap(cfgs []config.VerCfg, onoffMap map[string][]byte) (
                 hashkeybytes := make([]byte, 4)
                 binary.BigEndian.PutUint32(hashkeybytes, sareq.GetSpi())
                 hashkeybytes = append(hashkeybytes, []byte{0, 0, 0, 0}...)
-                hashres := util.HashFromBytes(hashkeybytes, len(maclist))
-                newMap[([8]byte)(hashkeybytes)] = maclist[hashres]
+                if len(maclist) == 0 {
+                    newMap[([8]byte)(hashkeybytes)] = MAC_DUMB
+                } else {
+                    hashres := util.HashFromBytes(hashkeybytes, len(maclist))
+                    newMap[([8]byte)(hashkeybytes)] = maclist[hashres]
+                }
                 r.spiMap[sareq.GetSpi()] = ipsecInfo{key:([8]byte)(hashkeybytes)}
             } else if srctmpl.String() == r.OuterIP {
                 // install for egress, so for internal subnet key is internalip
@@ -138,8 +150,12 @@ func (r *SlbRouter) recalMap(cfgs []config.VerCfg, onoffMap map[string][]byte) (
                 hashkeybytes = append(hashkeybytes, sareq.GetHostDst()...)
                 hashres := util.HashFromBytes(hashkeybytes, len(maclist))
                 // use hash as index to get onoffmap's key, then reterieve its mac addr
-                newMap[([8]byte)(hashkeybytes)] = maclist[hashres]
-                r.spiMap[sareq.GetSpi()] = ipsecInfo{key:([8]byte)(hashkeybytes)}
+                if len(maclist) == 0 {
+                    newMap[([8]byte)(hashkeybytes)] = MAC_DUMB
+                } else {
+                    newMap[([8]byte)(hashkeybytes)] = maclist[hashres]
+                    r.spiMap[sareq.GetSpi()] = ipsecInfo{key:([8]byte)(hashkeybytes)}
+                }
 
             } else {
                 return nil, nil, errors.New("addreq's src/dst not us")
@@ -194,7 +210,9 @@ func (r *SlbRouter) RecalAndInstall(cfgs []config.VerCfg, onoffMap map[string][]
         return err
     }
 
-    // todo:
+    // what to do if all is off? 
+    // we should set in newmap a special val and test before xdpobjs handle
+
     // for old not in new: delete
     for k, macaddr := range curmap {
         if _, ok := newmap[k]; !ok {
@@ -209,23 +227,27 @@ func (r *SlbRouter) RecalAndInstall(cfgs []config.VerCfg, onoffMap map[string][]
 
     // do new add stuff
     for k, macaddr := range newmap {
-        origV, ok := curmap[k]
-        if !ok {
-            // add new
-            fmt.Printf("\nadding %#v:%#v\n", k, macaddr)
-            err = r.xdpobjs.RedirectMap.Put(&k, &macaddr)
-        } else if !bytes.Equal(origV, macaddr) {
-            // modify map
-            fmt.Printf("\nmodify %#v:%#v=>%#v\n", k, origV, macaddr)
-            err = r.xdpobjs.RedirectMap.Put(&k, &macaddr)
+        if bytes.Equal(macaddr, MAC_DUMB) {
+            fmt.Printf("skip adding for key %#v\n", k)
         } else {
-            // nothing done here
+            origV, ok := curmap[k]
+            if !ok {
+                // add new
+                fmt.Printf("\nadding %#v:%#v\n", k, macaddr)
+                err = r.xdpobjs.RedirectMap.Put(&k, &macaddr)
+            } else if !bytes.Equal(origV, macaddr) {
+                // modify map
+                fmt.Printf("\nmodify %#v:%#v=>%#v\n", k, origV, macaddr)
+                err = r.xdpobjs.RedirectMap.Put(&k, &macaddr)
+            } else {
+                // nothing done here
+            }
+            if err != nil {
+                fmt.Printf("put %#v error %v\n", k, err)
+                return err
+            }
+            // update curmap
         }
-        if err != nil {
-            fmt.Printf("put %#v error %v\n", k, err)
-            return err
-        }
-        // update curmap
         curmap[k] = macaddr
     }
     fmt.Printf("\n=========== show map after install\n")
