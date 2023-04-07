@@ -1,26 +1,21 @@
-if [ $# -lt 2 ]; then
-    echo need send count range
+if [ $# -lt 5 ]; then
+    echo "need [l(local)|r(remote)] spi local_subnet remote_subnet [delete]"
     exit 1
 fi
 
-if [ $# -ge 2 ]; then
-from=$1
-to=$2
-fi
+lorr=$1
+spi=$2
+lnet=$3
+rnet=$4
+del=$5
 
-del=0
-
-if [ $# -gt 2 ]; then
-del=1
-fi
-
-for i in $(seq $from $to)
-do
-#echo count $i
-#./main_c tcp://192.168.122.173:22347 $i
-if [ $del -eq 0 ]; then
-./main_c tcp://192.168.122.173:22347 $i 192.168.122.$i 192.168.122.1 192.168.122.173 192.168.122.1
+if [ $lorr == "l" ]
+then
+    tmplsrc=172.16.1.50
+    tmpldst=172.16.3.21
 else
-./main_c tcp://192.168.122.173:22347 $i
+    tmplsrc=172.16.3.21
+    tmpldst=172.16.1.50
 fi
-done
+set -x
+./main_c tcp://172.16.1.51:22347 $spi 192.168.${lnet}.0/24 192.168.$rnet.0/24 $tmplsrc $tmpldst $del

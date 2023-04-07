@@ -192,6 +192,8 @@ node1(const char *url, uint32_t spi, char *srcip, char *dstip, char *tmplsrcip, 
             if (!srcpos || !dstpos) {
                 fatal("need netmask for src and dst subnet", -1);
             }
+            *srcpos = '\0';
+            *dstpos = '\0';
             int srcmask = atoi(srcpos+1);
             int dstmask = atoi(dstpos+1);
 

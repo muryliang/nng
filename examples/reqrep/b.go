@@ -4,6 +4,8 @@ import "flag"
 import "fmt"
 import "net"
 
+import "slb/util"
+
 type arrayFlags []string
 
 
@@ -32,5 +34,8 @@ func main() {
     c := ([6]byte)(a)
     b := make(map[[6]byte][]byte)
     b[c] = []byte{0x5,0x6}
-    fmt.Printf("%#v", b)
+    fmt.Printf("%#v\n", b)
+
+    _, err := util.GetIntfFromAddr("172.16.1.50")
+    fmt.Printf("err is %v\n", err)
 }

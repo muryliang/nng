@@ -22,3 +22,13 @@ type VerCfg struct {
     Cfg Config
 }
 
+type HbInfo struct {
+    InnerMac []byte
+    OuterMac []byte
+}
+
+type HbResp struct {
+    Addr string
+    HbInfo *HbInfo
+}
+

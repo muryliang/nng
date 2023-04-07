@@ -58,6 +58,14 @@ func GetMacFromAddr(laddr string) ([]byte, error) {
     return nil, errors.New("not find mac")
 }
 
+func GetMacFromIntfName(devname string) ([]byte, error) {
+    intf, err := net.InterfaceByName(devname)
+    if err != nil {
+        return nil, err
+    }
+    return []byte(intf.HardwareAddr), nil
+}
+
 func HashFromBytes(msg []byte, mod int) int {
     hash := sha256.Sum256([]byte(msg))
 

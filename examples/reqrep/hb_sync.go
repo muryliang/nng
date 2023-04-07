@@ -70,11 +70,6 @@ type HbTarget struct {
     SyncVer int64
 }
 
-type HbResp struct {
-    Addr string
-    Mac  []byte
-}
-
 type SendCfgs struct {
     Id   uint64
     Cfgs []config.VerCfg
@@ -85,16 +80,17 @@ type VerResp struct {
 }
 
 var HB_TIMEOUT = flag.Int("hbtmo", 1000, "heartbeat timeout(ms)")
-var localaddr = flag.String("laddr", "", "local addr xx.xx.xx.xx/mask")
-var vinnerIP = flag.String("vin", "", "vip of inner subnet xx.xx.xx.xx")
+var localaddr = flag.String("laddr", "", "local addr xx.xx.xx.xx")
+var vinnerIP = flag.String("vin", "", "vip of inner subnet xx.xx.xx.xx(if multiple inner subnet exist, only one is needed")
 var vouterIP = flag.String("vout", "", "vip of outer egress xx.xx.xx.xx")
 //var localaddrmask = flag.String("laddrmask", "24", "netmask")
 var sub = flag.Bool("sub", false, "subnet machine or not")
-var subIntf = flag.String("subIntf", "", "subnet's tunnel intf")
+var subInnerIntf = flag.String("subin", "", "subnet's inner intf name")
+var subOuterIntf = flag.String("subout", "", "sbunet's outer intf name")
 var remoteaddr = flag.String("raddr", "", "remote addr(s) comma seperated")
 
 // onoffmap, used between sync && lb
-var onoffMap map[string][]byte = make(map[string][]byte)
+var onoffMap map[string]*config.HbInfo = make(map[string]*config.HbInfo)
 var onoffLock sync.Mutex
 
 // macMap, used between router && sync && lb
@@ -115,6 +111,7 @@ func die(format string, v ...interface{}) {
 	os.Exit(1)
 }
 
+/*
 func verifyCfgs(showcfgs []config.VerCfg) error {
     for _, verCfg := range showcfgs {
         cfg := verCfg.Cfg
@@ -138,6 +135,7 @@ func verifyCfgs(showcfgs []config.VerCfg) error {
     }
     return nil
 }
+*/
 
 func notifyRt() {
     select {
@@ -311,7 +309,7 @@ func doRouter(innerIP string, outerIP string) {
         
         // create a copy, so we will not block other route who access config and map
         onoffLock.Lock()
-        copyOnoffMap := make(map[string][]byte)
+        copyOnoffMap := make(map[string]*config.HbInfo)
         for k, v := range onoffMap {
             copyOnoffMap[k] = v
         }
@@ -509,7 +507,7 @@ func subnet_installroute(icfgs []config.VerCfg) error {
             }
 
             // todo: maybe used this for policy add, so we need not add too much policy
-            if _, err = util.GetIntfFromAddr(tmplsrcip.String()); err != nil {
+            if _, err = util.GetIntfFromAddr(tmplsrcip.String()); err == nil {
                 // we are adding for local esp, so add outer route
                 cmdstr = fmt.Sprintf("ip rule add to %s/%d table 15", dstip.String(), dstipmask)
                 cmd = exec.Command("bash", "-c", cmdstr)
@@ -517,7 +515,7 @@ func subnet_installroute(icfgs []config.VerCfg) error {
                 if err != nil {
                     fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
                 }
-                cmdstr = fmt.Sprintf("ip route add %s/%d dev %s table 15", dstip.String(), dstipmask, *subIntf)
+                cmdstr = fmt.Sprintf("ip route add %s/%d dev %s table 15", dstip.String(), dstipmask, *subOuterIntf)
                 cmd = exec.Command("bash", "-c", cmdstr)
                 err = cmd.Run()
                 if err != nil {
@@ -573,7 +571,7 @@ func subnet_installroute(icfgs []config.VerCfg) error {
                 if err != nil {
                     fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
                 }
-                cmdstr = fmt.Sprintf("ip route del %s/%d dev %s table 15", dstip.String(), dstipmask, *subIntf)
+                cmdstr = fmt.Sprintf("ip route del %s/%d dev %s table 15", dstip.String(), dstipmask, *subOuterIntf)
                 cmd = exec.Command("bash", "-c", cmdstr)
                 err = cmd.Run()
                 if err != nil {
@@ -584,6 +582,15 @@ func subnet_installroute(icfgs []config.VerCfg) error {
         }
     }
     return err
+}
+
+func subsideClean() {
+    cmdstr := "ip rule del table 15; ip route; ip route flush table 15; ip xfrm state deleteall; ip xfrm policy deleteall"
+    cmd := exec.Command("bash", "-c", cmdstr)
+    err := cmd.Run()
+    if err != nil {
+        fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+    }
 }
 
 func syncCfg_subside(laddr string) {
@@ -621,6 +628,7 @@ func syncCfg_subside(laddr string) {
             fmt.Printf("server restarted, trim config\n")
             curServerId = sendCfgs.Id
             localcfgs = localcfgs[:1] // trim cfgs as server restarted
+            subsideClean()
         }
         cfgs := sendCfgs.Cfgs
 
@@ -638,10 +646,12 @@ func syncCfg_subside(laddr string) {
                     resp.SyncVer < endVer {
                 localcfgs = append(localcfgs, cfgs[resp.SyncVer + 1 - startVer:]...)
                 installcfgs := cfgs[resp.SyncVer + 1 - startVer:]
+                /*
                 err = verifyCfgs(installcfgs)
                 if err != nil {
                     die("Failed verify cfgs in client: %s", err.Error())
                 }
+                */
                 fmt.Printf("update ver from %d to %d\n", resp.SyncVer, localcfgs[len(localcfgs)-1].Ver)
                 resp.SyncVer = localcfgs[len(localcfgs)-1].Ver
                 err = subnet_installroute(installcfgs)
@@ -705,7 +715,7 @@ func hb_lbside(laddr string) {
             // quick break out
             break
         }
-        recvMap := make(map[string][]byte)
+        recvMap := make(map[string]*config.HbInfo)
         for key := range failMap {
             recvMap[key] = nil
         }
@@ -723,7 +733,7 @@ func hb_lbside(laddr string) {
                 fmt.Println("get err ", err);
                 break
             }
-            hbresp := HbResp{}
+            hbresp := config.HbResp{}
             err = json.Unmarshal(msg, &hbresp)
             if err != nil {
                 fmt.Printf("get json err %v, retry\n", err)
@@ -736,10 +746,10 @@ func hb_lbside(laddr string) {
                 fmt.Printf("get wrong key %s\n", string(msg))
             } else {
                 if mapval == nil {
-                    recvMap[from_addr] = hbresp.Mac
+                    recvMap[from_addr] = hbresp.HbInfo
                 } else {
-                    fmt.Printf("recv dup key for add %s %v => %v\n", from_addr, mapval, hbresp.Mac)
-                    recvMap[from_addr] = hbresp.Mac
+                    fmt.Printf("recv dup key for add %s %v => %v\n", from_addr, mapval, hbresp.HbInfo)
+                    recvMap[from_addr] = hbresp.HbInfo
                 }
                 recv_cnt ++
                 if recv_cnt == total_cnt {
@@ -750,8 +760,8 @@ func hb_lbside(laddr string) {
 
         changed := false
         onoffLock.Lock()
-        for addr, macaddr := range recvMap {
-            if macaddr == nil {
+        for addr, hbinfo := range recvMap {
+            if hbinfo == nil {
                 failMap[addr] += 1
                 fmt.Printf("%s failed\n", addr)
                 if failMap[addr] == HB_MAX_FAIL { // when > MAX, already false, not do it
@@ -763,7 +773,7 @@ func hb_lbside(laddr string) {
                 failMap[addr] = 0
                 if onoffMap[addr] == nil {
                     fmt.Printf("%s recovered, set on\n", addr)
-                    onoffMap[addr] = macaddr
+                    onoffMap[addr] = hbinfo
                     changed = true
                 }
             }
@@ -835,11 +845,15 @@ func hb_subside(laddr string, raddr string) {
 
         i++
 		fmt.Printf("client: responding hb %d %s\n", i, laddr)
-        mac, err := util.GetMacFromAddr(laddr)
+        innermac, err := util.GetMacFromIntfName(*subInnerIntf)
         if err != nil {
-            die("client hb can not get mac")
+            die("client hb can not get inner mac")
         }
-        hbResp := HbResp{Addr: laddr, Mac: mac}
+        outermac, err := util.GetMacFromIntfName(*subOuterIntf)
+        if err != nil {
+            die("client hb can not get outer mac")
+        }
+        hbResp := config.HbResp{Addr: laddr, HbInfo: &config.HbInfo{InnerMac:innermac, OuterMac:outermac}}
         sendMsg, err := json.Marshal(hbResp)
         if err != nil {
             die("client hb can not marshal")
@@ -886,8 +900,8 @@ func main() {
             time.Sleep(1 * time.Second)
         }
     } else {
-        if *subIntf == "" {
-            die("sub need tunnel intf\n")
+        if *subInnerIntf == "" || *subOuterIntf == "" {
+            die("sub need intf names\n")
         }
         hbUrl, err := util.ConcatString(PROTO, *remoteaddr, ":", HB_PORT)
         if err != nil {
