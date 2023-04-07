@@ -33,24 +33,32 @@ struct  _Slb__AddSaReq
 {
   ProtobufCMessage base;
   ProtobufCBinaryData host_src;
+  uint32_t host_src_mask;
   ProtobufCBinaryData host_dst;
+  uint32_t host_dst_mask;
   ProtobufCBinaryData tmpl_host_src;
   ProtobufCBinaryData tmpl_host_dst;
   uint32_t spi;
 };
 #define SLB__ADD_SA_REQ__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&slb__add_sa_req__descriptor) \
-    , {0,NULL}, {0,NULL}, {0,NULL}, {0,NULL}, 0 }
+    , {0,NULL}, 0, {0,NULL}, 0, {0,NULL}, {0,NULL}, 0 }
 
 
 struct  _Slb__DelSaReq
 {
   ProtobufCMessage base;
+  ProtobufCBinaryData host_src;
+  uint32_t host_src_mask;
+  ProtobufCBinaryData host_dst;
+  uint32_t host_dst_mask;
+  ProtobufCBinaryData tmpl_host_src;
+  ProtobufCBinaryData tmpl_host_dst;
   uint32_t spi;
 };
 #define SLB__DEL_SA_REQ__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&slb__del_sa_req__descriptor) \
-    , 0 }
+    , {0,NULL}, 0, {0,NULL}, 0, {0,NULL}, {0,NULL}, 0 }
 
 
 /*

@@ -37,7 +37,7 @@ void dump(uint8_t *buf, int len) {
     printf("\n");
 }
 
-int construct_add_sa(char *buf, char *src_ip, char *dst_ip, 
+int construct_add_sa(char *buf, char *src_ip, int smask, char *dst_ip, int dmask,
         char *tmpl_src_ip, char *tmpl_dst_ip, uint32_t spi) {
 
     Slb__AddSaReq req;
@@ -49,12 +49,17 @@ int construct_add_sa(char *buf, char *src_ip, char *dst_ip,
     assert(inet_pton(AF_INET, src_ip, &addr_src) == 1);
     req.host_src.len = sizeof(struct in_addr);
     req.host_src.data = (void*)&addr_src;
+    req.host_src_mask = (uint32_t)smask;
+
     assert(inet_pton(AF_INET, dst_ip, &addr_dst) == 1);
     req.host_dst.len = sizeof(struct in_addr);
     req.host_dst.data = (void*)&addr_dst;
+    req.host_dst_mask = (uint32_t)dmask;
+
     assert(inet_pton(AF_INET, tmpl_src_ip, &addr_tmpl_src) == 1);
     req.tmpl_host_src.len = sizeof(struct in_addr);
     req.tmpl_host_src.data = (void*)&addr_tmpl_src;
+
     assert(inet_pton(AF_INET, tmpl_dst_ip, &addr_tmpl_dst) == 1);
     req.tmpl_host_dst.len = sizeof(struct in_addr);
     req.tmpl_host_dst.data = (void*)&addr_tmpl_dst;
@@ -91,13 +96,32 @@ int construct_add_sa(char *buf, char *src_ip, char *dst_ip,
     return len;
 }
 
-int construct_del_sa(char *buf, uint32_t spi) {
+int construct_del_sa(char *buf, char *src_ip, int smask, char *dst_ip, int dmask,
+        char *tmpl_src_ip, char *tmpl_dst_ip, uint32_t spi) {
 
     Slb__DelSaReq req;
 
     slb__del_sa_req__init(&req);
     int len;
+    struct in_addr addr_src, addr_dst, addr_tmpl_src, addr_tmpl_dst;
 
+    assert(inet_pton(AF_INET, src_ip, &addr_src) == 1);
+    req.host_src.len = sizeof(struct in_addr);
+    req.host_src.data = (void*)&addr_src;
+    req.host_src_mask = (uint32_t)smask;
+
+    assert(inet_pton(AF_INET, dst_ip, &addr_dst) == 1);
+    req.host_dst.len = sizeof(struct in_addr);
+    req.host_dst.data = (void*)&addr_dst;
+    req.host_dst_mask = (uint32_t)dmask;
+
+    assert(inet_pton(AF_INET, tmpl_src_ip, &addr_tmpl_src) == 1);
+    req.tmpl_host_src.len = sizeof(struct in_addr);
+    req.tmpl_host_src.data = (void*)&addr_tmpl_src;
+
+    assert(inet_pton(AF_INET, tmpl_dst_ip, &addr_tmpl_dst) == 1);
+    req.tmpl_host_dst.len = sizeof(struct in_addr);
+    req.tmpl_host_dst.data = (void*)&addr_tmpl_dst;
     req.spi = spi;
 
     // include header here
@@ -141,7 +165,7 @@ int resolve_resp(char *buf, int len) {
 }
 
 int
-node1(const char *url, uint32_t spi, char *srcip, char *dstip, char *tmplsrcip, char *tmpldstip)
+node1(const char *url, uint32_t spi, char *srcip, char *dstip, char *tmplsrcip, char *tmpldstip, int del)
 {
         nng_socket sock;
         int rv;
@@ -163,75 +187,42 @@ node1(const char *url, uint32_t spi, char *srcip, char *dstip, char *tmplsrcip, 
 
             // construct data here
             int bufsize;
-
-            bufsize = construct_add_sa(NULL, srcip, dstip, tmplsrcip, tmpldstip, spi);
-            if (bufsize < 0) {
-                printf("some error\n");
-                return -1;
+            char * srcpos = strchr(srcip, '/');
+            char * dstpos = strchr(dstip, '/');
+            if (!srcpos || !dstpos) {
+                fatal("need netmask for src and dst subnet", -1);
             }
-            buf = malloc(bufsize);
-            if (!buf) {
-                printf("can not alloc mem %d size\n", bufsize);
-                return -1;
+            int srcmask = atoi(srcpos+1);
+            int dstmask = atoi(dstpos+1);
+
+            if (!del)  {
+                bufsize = construct_add_sa(NULL, srcip, srcmask, dstip, dstmask, tmplsrcip, tmpldstip, spi);
+                if (bufsize < 0) {
+                    printf("some error\n");
+                    return -1;
+                }
+                buf = malloc(bufsize);
+                if (!buf) {
+                    printf("can not alloc mem %d size\n", bufsize);
+                    return -1;
+                }
+                assert(construct_add_sa(buf, srcip, srcmask, dstip, dstmask, tmplsrcip, tmpldstip, spi) == bufsize);
+                printf("add_sa: send src %s/%d dst %s/%d tmplsrc %s tmpdst %s spi %d\n", srcip, srcmask, dstip, dstmask, tmplsrcip, tmpldstip, spi);
+            } else {
+                bufsize = construct_del_sa(NULL, srcip, srcmask, dstip, dstmask, tmplsrcip, tmpldstip, spi);
+                if (bufsize < 0) {
+                    printf("some error\n");
+                    return -1;
+                }
+                buf = malloc(bufsize);
+                if (!buf) {
+                    printf("can not alloc mem %d size\n", bufsize);
+                    return -1;
+                }
+                assert(construct_del_sa(buf, srcip, srcmask, dstip, dstmask, tmplsrcip, tmpldstip, spi) == bufsize);
+                printf("del_sa: send src %s/%d dst %s/%d tmplsrc %s tmpdst %s spi %d\n", srcip, srcmask, dstip, dstmask, tmplsrcip, tmpldstip, spi);
             }
-            assert(construct_add_sa(buf, srcip, dstip, tmplsrcip, tmpldstip, spi) == bufsize);
 
-            printf("add_sa: send src %s dst %s tmplsrc %s tmpdst %s spi %d\n", srcip, dstip, tmplsrcip, tmpldstip, spi);
-            if ((rv = nng_send(sock, buf, bufsize, 0)) != 0) {
-                    fatal("nng_send", rv);
-            }
-            if ((rv = nng_recv(sock, &recvbuf, &recv_sz, NNG_FLAG_ALLOC)) != 0) {
-                    fatal("nng_recv", rv);
-            }
-            resolve_resp(recvbuf, recv_sz);
-//            printf("count %d, receive data size %d\n", i, recv_sz);  
-//            dump(recvbuf, recv_sz);
-//            nng_msleep(1000);
-        }
-//        clock_gettime(CLOCK_REALTIME, &t2);
-//        printf("count %d, time %ld\n", i, ((t2.tv_sec - t1.tv_sec) * 1000000000 + t2.tv_nsec - t1.tv_nsec) / 1000000);
-        nng_free(buf, recv_sz);
-        nng_close(sock);
-        return (0);
-}
-
-int
-node1_del(const char *url, uint32_t spi)
-{
-        nng_socket sock;
-        int rv;
-        size_t recv_sz;
-        char *buf = NULL, *recvbuf = NULL;
-        int i;
-
-        if ((rv = nng_req0_open(&sock)) != 0) {
-                fatal("nng_socket", rv);
-        }
-        if ((rv = nng_dial(sock, url, NULL, 0)) != 0) {
-                fatal("nng_dial", rv);
-        }
-
-//        struct timespec t1, t2;
-//        clock_gettime(CLOCK_REALTIME, &t1);
-        int total_i = 1;
-        for (i = 1; i <= total_i;i++){
-
-            // construct data here
-            int bufsize;
-
-            bufsize = construct_del_sa(NULL, spi);
-            if (bufsize < 0) {
-                printf("some error\n");
-                return -1;
-            }
-            buf = malloc(bufsize);
-            if (!buf) {
-                printf("can not alloc mem %d size\n", bufsize);
-                return -1;
-            }
-            assert(construct_del_sa(buf, spi) == bufsize);
-
-            printf("del_sa: send spi %d\n", spi);
             if ((rv = nng_send(sock, buf, bufsize, 0)) != 0) {
                     fatal("nng_send", rv);
             }
@@ -254,13 +245,11 @@ node1_del(const char *url, uint32_t spi)
 int
 main(int argc, char **argv)
 {
-    if (argc == 7) {
-        return node1(argv[1], strtol(argv[2], NULL, 0), argv[3], argv[4], argv[5], argv[6]);
-    } else if (argc == 3) {
-        return node1_del(argv[1], strtol(argv[2], NULL, 0));
+    if (argc == 8) {
+        return node1(argv[1], strtol(argv[2], NULL, 0), argv[3], argv[4], argv[5], argv[6], atoi(argv[7]));
     }
 
-    fprintf(stderr, "Usage addsa: reqrep <URL> spi src dst tmplsrc tmpldst\n");
-    fprintf(stderr, "Usage delsa: reqrep <URL> spi\n");
+    fprintf(stderr, "Usage addsa: reqrep <URL> spi src dst tmplsrc tmpldst 0\n");
+    fprintf(stderr, "Usage addsa: reqrep <URL> spi src dst tmplsrc tmpldst 1\n");
     return 1;
 }

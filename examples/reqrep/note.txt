@@ -1,5 +1,14 @@
+howto run in netns:
+    - sh /root/work/raw_ipsec/set_ns.sh
+    - sh slbroute/build.sh
+    - sh slbroute/do_load.sh
+    - run your program somewhere
+
+    - how to delete
+        - sh slbroute/do_unload.sh
+        - sh /root/work/raw_ipsec/del_ns.sh
 next:
-    - finish xdp module, use from bootstrap 's code
+    - (done) finish xdp module, use from bootstrap 's code
     - use rawipsec's config to do test
     - [ also do a xdp redirect test ]
     - embed ccode in strongswan, each time new child sa create, we create a dial sock for it

@@ -142,7 +142,7 @@ void   slb__status_resp__free_unpacked
   assert(message->base.descriptor == &slb__status_resp__descriptor);
   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
 }
-static const ProtobufCFieldDescriptor slb__add_sa_req__field_descriptors[5] =
+static const ProtobufCFieldDescriptor slb__add_sa_req__field_descriptors[7] =
 {
   {
     "host_src",
@@ -157,8 +157,20 @@ static const ProtobufCFieldDescriptor slb__add_sa_req__field_descriptors[5] =
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
   {
-    "host_dst",
+    "host_src_mask",
     2,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(Slb__AddSaReq, host_src_mask),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "host_dst",
+    3,
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_BYTES,
     0,   /* quantifier_offset */
@@ -169,8 +181,20 @@ static const ProtobufCFieldDescriptor slb__add_sa_req__field_descriptors[5] =
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
   {
+    "host_dst_mask",
+    4,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(Slb__AddSaReq, host_dst_mask),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
     "tmpl_host_src",
-    3,
+    5,
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_BYTES,
     0,   /* quantifier_offset */
@@ -182,7 +206,7 @@ static const ProtobufCFieldDescriptor slb__add_sa_req__field_descriptors[5] =
   },
   {
     "tmpl_host_dst",
-    4,
+    6,
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_BYTES,
     0,   /* quantifier_offset */
@@ -194,7 +218,7 @@ static const ProtobufCFieldDescriptor slb__add_sa_req__field_descriptors[5] =
   },
   {
     "spi",
-    5,
+    7,
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_UINT32,
     0,   /* quantifier_offset */
@@ -206,16 +230,18 @@ static const ProtobufCFieldDescriptor slb__add_sa_req__field_descriptors[5] =
   },
 };
 static const unsigned slb__add_sa_req__field_indices_by_name[] = {
-  1,   /* field[1] = host_dst */
+  2,   /* field[2] = host_dst */
+  3,   /* field[3] = host_dst_mask */
   0,   /* field[0] = host_src */
-  4,   /* field[4] = spi */
-  3,   /* field[3] = tmpl_host_dst */
-  2,   /* field[2] = tmpl_host_src */
+  1,   /* field[1] = host_src_mask */
+  6,   /* field[6] = spi */
+  5,   /* field[5] = tmpl_host_dst */
+  4,   /* field[4] = tmpl_host_src */
 };
 static const ProtobufCIntRange slb__add_sa_req__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 5 }
+  { 0, 7 }
 };
 const ProtobufCMessageDescriptor slb__add_sa_req__descriptor =
 {
@@ -225,18 +251,90 @@ const ProtobufCMessageDescriptor slb__add_sa_req__descriptor =
   "Slb__AddSaReq",
   "slb",
   sizeof(Slb__AddSaReq),
-  5,
+  7,
   slb__add_sa_req__field_descriptors,
   slb__add_sa_req__field_indices_by_name,
   1,  slb__add_sa_req__number_ranges,
   (ProtobufCMessageInit) slb__add_sa_req__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
-static const ProtobufCFieldDescriptor slb__del_sa_req__field_descriptors[1] =
+static const ProtobufCFieldDescriptor slb__del_sa_req__field_descriptors[7] =
 {
   {
-    "spi",
+    "host_src",
     1,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_BYTES,
+    0,   /* quantifier_offset */
+    offsetof(Slb__DelSaReq, host_src),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "host_src_mask",
+    2,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(Slb__DelSaReq, host_src_mask),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "host_dst",
+    3,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_BYTES,
+    0,   /* quantifier_offset */
+    offsetof(Slb__DelSaReq, host_dst),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "host_dst_mask",
+    4,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(Slb__DelSaReq, host_dst_mask),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "tmpl_host_src",
+    5,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_BYTES,
+    0,   /* quantifier_offset */
+    offsetof(Slb__DelSaReq, tmpl_host_src),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "tmpl_host_dst",
+    6,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_BYTES,
+    0,   /* quantifier_offset */
+    offsetof(Slb__DelSaReq, tmpl_host_dst),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "spi",
+    7,
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_UINT32,
     0,   /* quantifier_offset */
@@ -248,12 +346,18 @@ static const ProtobufCFieldDescriptor slb__del_sa_req__field_descriptors[1] =
   },
 };
 static const unsigned slb__del_sa_req__field_indices_by_name[] = {
-  0,   /* field[0] = spi */
+  2,   /* field[2] = host_dst */
+  3,   /* field[3] = host_dst_mask */
+  0,   /* field[0] = host_src */
+  1,   /* field[1] = host_src_mask */
+  6,   /* field[6] = spi */
+  5,   /* field[5] = tmpl_host_dst */
+  4,   /* field[4] = tmpl_host_src */
 };
 static const ProtobufCIntRange slb__del_sa_req__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 1 }
+  { 0, 7 }
 };
 const ProtobufCMessageDescriptor slb__del_sa_req__descriptor =
 {
@@ -263,7 +367,7 @@ const ProtobufCMessageDescriptor slb__del_sa_req__descriptor =
   "Slb__DelSaReq",
   "slb",
   sizeof(Slb__DelSaReq),
-  1,
+  7,
   slb__del_sa_req__field_descriptors,
   slb__del_sa_req__field_indices_by_name,
   1,  slb__del_sa_req__number_ranges,

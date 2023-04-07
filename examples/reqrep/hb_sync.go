@@ -28,6 +28,7 @@ import (
     "encoding/binary"
     "encoding/hex"
     "bytes"
+    "os/exec"
 
 	"go.nanomsg.org/mangos/v3"
 	"go.nanomsg.org/mangos/v3/protocol/req"
@@ -89,6 +90,7 @@ var vinnerIP = flag.String("vin", "", "vip of inner subnet xx.xx.xx.xx")
 var vouterIP = flag.String("vout", "", "vip of outer egress xx.xx.xx.xx")
 //var localaddrmask = flag.String("laddrmask", "24", "netmask")
 var sub = flag.Bool("sub", false, "subnet machine or not")
+var subIntf = flag.String("subIntf", "", "subnet's tunnel intf")
 var remoteaddr = flag.String("raddr", "", "remote addr(s) comma seperated")
 
 // onoffmap, used between sync && lb
@@ -126,10 +128,12 @@ func verifyCfgs(showcfgs []config.VerCfg) error {
             }
             srcip := net.IP(sareq.GetHostSrc())
             dstip := net.IP(sareq.GetHostDst())
+            srcipmask := sareq.GetHostSrcMask()
+            dstipmask := sareq.GetHostDstMask()
             tmplsrcip := net.IP(sareq.GetTmplHostSrc())
             tmpldstip := net.IP(sareq.GetTmplHostDst())
             spi := sareq.GetSpi()
-            fmt.Printf("cfg client received ver %d, op %s, src:%s, dst:%s,tmplsrc %s, tmpldst %s, spi:0x%x\n", verCfg.Ver, config.Gmap[op], srcip.String(), dstip.String(), tmplsrcip.String(), tmpldstip.String(), spi)
+            fmt.Printf("cfg client received ver %d, op %s, src:%s/%d, dst:%s/%d,tmplsrc %s, tmpldst %s, spi:0x%x\n", verCfg.Ver, config.Gmap[op], srcip.String(), srcipmask, dstip.String(), dstipmask, tmplsrcip.String(), tmpldstip.String(), spi)
         }
     }
     return nil
@@ -201,7 +205,6 @@ func recvCfg(laddr string) {
 			die("cannot receive on cfg socket: %s", err.Error())
 		}
         fmt.Printf("get msg %s\n", hex.EncodeToString(msg))
-        sareq := &slbproto.AddSaReq{}
         msglen := int(binary.BigEndian.Uint32(msg[:4]))
         if msglen != len(msg) {
             die("msg len not correct %x %d", msglen, len(msg))
@@ -211,7 +214,9 @@ func recvCfg(laddr string) {
 
         // do a test unmarshal here, but store in cfg the protobuf only and op
 
-        resp := &slbproto.StatusResp{}
+        // maybe do a test here, but add, del struct not same
+        /*
+        sareq := &slbproto.AddSaReq{}
         err := proto.Unmarshal(msg[8:], sareq)
         if err != nil {
             fmt.Printf("can not parse received data")
@@ -223,6 +228,7 @@ func recvCfg(laddr string) {
         } else {
             resp.Status = ST_OK
         }
+        */
         /*
         srcip := net.IP(sareq.GetHostSrc())
         dstip := net.IP(sareq.GetHostDst())
@@ -232,6 +238,7 @@ func recvCfg(laddr string) {
         fmt.Printf("cfg server received size %d, src:%s, dst:%s,tmplsrc %s, tmpldst %s, spi:%x\n", len(msg), srcip.String(), dstip.String(), tmplsrcip.String(), tmpldstip.String(), spi)
         */
 
+        resp := &slbproto.StatusResp{}
         buf := new(bytes.Buffer)
         err = binary.Write(buf, binary.BigEndian, int32(proto.Size(resp) + 8))
         if err != nil {
@@ -453,6 +460,132 @@ func syncCfg_lbside(serverId uint64) {
 	}
 }
 
+func subnet_installroute(icfgs []config.VerCfg) error {
+    var err error
+    for _, icfg := range icfgs {
+
+        cfg := icfg.Cfg
+        op := cfg.Op
+        var cmdstr string
+        if cfg.Op == config.OP_ADD_SA {
+            sareq := &slbproto.AddSaReq{}
+            err = proto.Unmarshal(cfg.Data, sareq)
+            if err != nil {
+                fmt.Printf("can not parse showcfg")
+                return err
+            }
+            srcip := net.IP(sareq.GetHostSrc())
+            dstip := net.IP(sareq.GetHostDst())
+            srcipmask := sareq.GetHostSrcMask()
+            dstipmask := sareq.GetHostDstMask()
+            tmplsrcip := net.IP(sareq.GetTmplHostSrc())
+            tmpldstip := net.IP(sareq.GetTmplHostDst())
+            spi := sareq.GetSpi()
+            fmt.Printf("cfg client received add ver %d, op %s, src:%s/%d, dst:%s/%d,tmplsrc %s, tmpldst %s, spi:0x%x\n", icfg.Ver, config.Gmap[op], srcip.String(), srcipmask, dstip.String(), dstipmask, tmplsrcip.String(), tmpldstip.String(), spi)
+
+            cmdstr = fmt.Sprintf("ip xfrm state add src %s dst %s proto esp spi 0x%x mode tunnel auth digest_null \"\" enc cipher_null \"\" ", tmplsrcip.String(), tmpldstip.String(), spi)
+            cmd := exec.Command("bash", "-c", cmdstr)
+            err = cmd.Run()
+            if err != nil {
+                fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+            }
+            cmdstr = fmt.Sprintf("ip xfrm policy add src %s/%d dst %s/%d dir out ptype main tmpl src %s dst %s proto esp mode tunnel ", srcip.String(), srcipmask, dstip.String(), dstipmask, tmplsrcip.String(), tmpldstip.String())
+            cmd = exec.Command("bash", "-c", cmdstr)
+            err = cmd.Run()
+            if err != nil {
+                fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+            }
+            cmdstr = fmt.Sprintf("ip xfrm policy add src %s/%d dst %s/%d dir in ptype main tmpl src %s dst %s proto esp mode tunnel ", dstip.String(), dstipmask, srcip.String(), srcipmask, tmpldstip.String(), tmplsrcip.String())
+            cmd = exec.Command("bash", "-c", cmdstr)
+            err = cmd.Run()
+            if err != nil {
+                fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+            }
+            cmdstr = fmt.Sprintf("ip xfrm policy add src %s/%d dst %s/%d dir fwd ptype main tmpl src %s dst %s proto esp mode tunnel ", dstip.String(), dstipmask, srcip.String(), srcipmask, tmpldstip.String(), tmplsrcip.String())
+            cmd = exec.Command("bash", "-c", cmdstr)
+            err = cmd.Run()
+            if err != nil {
+                fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+            }
+
+            // todo: maybe used this for policy add, so we need not add too much policy
+            if _, err = util.GetIntfFromAddr(tmplsrcip.String()); err != nil {
+                // we are adding for local esp, so add outer route
+                cmdstr = fmt.Sprintf("ip rule add to %s/%d table 15", dstip.String(), dstipmask)
+                cmd = exec.Command("bash", "-c", cmdstr)
+                err = cmd.Run()
+                if err != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                }
+                cmdstr = fmt.Sprintf("ip route add %s/%d dev %s table 15", dstip.String(), dstipmask, *subIntf)
+                cmd = exec.Command("bash", "-c", cmdstr)
+                err = cmd.Run()
+                if err != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                }
+
+            }
+        } else if cfg.Op == config.OP_DEL_SA {
+            sareq := &slbproto.DelSaReq{}
+            err := proto.Unmarshal(cfg.Data, sareq)
+            if err != nil {
+                fmt.Printf("can not parse showcfg")
+                return err
+            }
+            srcip := net.IP(sareq.GetHostSrc())
+            dstip := net.IP(sareq.GetHostDst())
+            srcipmask := sareq.GetHostSrcMask()
+            dstipmask := sareq.GetHostDstMask()
+            tmplsrcip := net.IP(sareq.GetTmplHostSrc())
+            tmpldstip := net.IP(sareq.GetTmplHostDst())
+            spi := sareq.GetSpi()
+            fmt.Printf("cfg client received delete ver %d spi:0x%x src %s/%d dst %s/%d\n", icfg, spi, srcip.String(), srcipmask, tmpldstip.String(), dstipmask)
+            cmdstr = fmt.Sprintf("ip xfrm state delete spi 0x%x src %s dst %s proto esp", spi, tmplsrcip.String(), tmpldstip.String())
+            cmd := exec.Command("bash", "-c", cmdstr)
+            err = cmd.Run()
+            if err != nil {
+                fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+            }
+
+            cmdstr = fmt.Sprintf("ip xfrm policy delete dir out src %s/%d dst %s/%d", srcip.String(), srcipmask, dstip.String(), dstipmask)
+            cmd = exec.Command("bash", "-c", cmdstr)
+            err = cmd.Run()
+            if err != nil {
+                fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+            }
+            cmdstr = fmt.Sprintf("ip xfrm policy delete dir in src %s/%d dst %s/%d", dstip.String(), dstipmask, srcip.String(), srcipmask)
+            cmd = exec.Command("bash", "-c", cmdstr)
+            err = cmd.Run()
+            if err != nil {
+                fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+            }
+            cmdstr = fmt.Sprintf("ip xfrm policy delete dir fwd src %s/%d dst %s/%d", dstip.String(), dstipmask, srcip.String(), srcipmask)
+            cmd = exec.Command("bash", "-c", cmdstr)
+            err = cmd.Run()
+            if err != nil {
+                fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+            }
+            if _, err = util.GetIntfFromAddr(tmplsrcip.String()); err != nil {
+                // we are adding for local esp, so add outer route
+                cmdstr = fmt.Sprintf("ip rule del to %s/%d table 15", dstip.String(), dstipmask)
+                cmd = exec.Command("bash", "-c", cmdstr)
+                err = cmd.Run()
+                if err != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                }
+                cmdstr = fmt.Sprintf("ip route del %s/%d dev %s table 15", dstip.String(), dstipmask, *subIntf)
+                cmd = exec.Command("bash", "-c", cmdstr)
+                err = cmd.Run()
+                if err != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                }
+
+            }
+        }
+    }
+    return err
+}
+
 func syncCfg_subside(laddr string) {
 	var sock mangos.Socket
 	var err error
@@ -504,12 +637,17 @@ func syncCfg_subside(laddr string) {
             if resp.SyncVer + 1 >= startVer &&
                     resp.SyncVer < endVer {
                 localcfgs = append(localcfgs, cfgs[resp.SyncVer + 1 - startVer:]...)
-                err = verifyCfgs(cfgs[resp.SyncVer + 1 - startVer:])
+                installcfgs := cfgs[resp.SyncVer + 1 - startVer:]
+                err = verifyCfgs(installcfgs)
                 if err != nil {
                     die("Failed verify cfgs in client: %s", err.Error())
                 }
                 fmt.Printf("update ver from %d to %d\n", resp.SyncVer, localcfgs[len(localcfgs)-1].Ver)
                 resp.SyncVer = localcfgs[len(localcfgs)-1].Ver
+                err = subnet_installroute(installcfgs)
+                if err != nil {
+                    die("Failed to install cfg %v", err.Error())
+                }
             } else {
                 fmt.Printf("remain ver as %d\n", resp.SyncVer)
             }
@@ -721,10 +859,10 @@ func main() {
     // server need hb url(bind), sync's urls for each server(dial)
     // use flag.Var for custom multiple arg, see b.go
     flag.Parse()
+    if *localaddr == "" || *remoteaddr == "" {
+        die("need specify local/remote ip addr here")
+    }
     if !*sub {
-        if *localaddr == "" || *remoteaddr == "" {
-            die("need specify local/remote ip addr here")
-        }
         // lb, construct hburl, subservers url here
         subservers := strings.Split(*remoteaddr, ",")
         fmt.Printf("lb mode hb addr %s, subservers %v\n", *localaddr, subservers)
@@ -748,6 +886,9 @@ func main() {
             time.Sleep(1 * time.Second)
         }
     } else {
+        if *subIntf == "" {
+            die("sub need tunnel intf\n")
+        }
         hbUrl, err := util.ConcatString(PROTO, *remoteaddr, ":", HB_PORT)
         if err != nil {
             die("sub can not get hb url\n")

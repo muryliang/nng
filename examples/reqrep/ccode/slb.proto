@@ -8,14 +8,22 @@ option go_package = "/slbproto";
 // just call del() and new() sa
 message AddSaReq {
   bytes host_src = 1;
-  bytes host_dst = 2;
-  bytes tmpl_host_src = 3;
-  bytes tmpl_host_dst = 4;
-  uint32 spi = 5;
+  uint32 host_src_mask = 2;
+  bytes host_dst = 3;
+  uint32 host_dst_mask = 4;
+  bytes tmpl_host_src = 5;
+  bytes tmpl_host_dst = 6;
+  uint32 spi = 7;
 }
 
 message DelSaReq {
-  uint32 spi = 1;
+  bytes host_src = 1;
+  uint32 host_src_mask = 2;
+  bytes host_dst = 3;
+  uint32 host_dst_mask = 4;
+  bytes tmpl_host_src = 5;
+  bytes tmpl_host_dst = 6;
+  uint32 spi = 7;
 }
 
 // The response message containing the greetings
