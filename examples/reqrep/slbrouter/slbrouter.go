@@ -63,6 +63,8 @@ type SlbRouter struct {
 }
 
 var MAC_DUMB []byte  = []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+var INNER_VIP_INDEX uint32 = 0
+var OUTER_VIP_INDEX uint32 = 1
 
 // check currently ON maclist, and adjust configured ones
 func (r *SlbRouter) adjustTopo(newMap map[[8]byte][]byte, onoffMap map[string][]byte, maclist [][]byte) {
@@ -300,6 +302,18 @@ func (r *SlbRouter) Run() error {
 	}
 //	defer l.Close()
 
+    innerip := []byte(net.ParseIP(r.InnerIP))
+    outerip := []byte(net.ParseIP(r.OuterIP))
+    err = r.xdpobjs.VipArr.Put(&INNER_VIP_INDEX, &innerip)
+    if err != nil {
+        fmt.Printf("failed to set inner ip")
+        return err
+    }
+    err = r.xdpobjs.VipArr.Put(&OUTER_VIP_INDEX, &outerip)
+    if err != nil {
+        fmt.Printf("failed to set outer ip")
+        return err
+    }
 	fmt.Printf("Attached XDP program to inner iface %q (index %d)\n", r.InnerIntf.Name, r.InnerIntf.Index)
     return nil
 

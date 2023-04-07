@@ -64,6 +64,7 @@ type bpfProgramSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfMapSpecs struct {
 	RedirectMap *ebpf.MapSpec `ebpf:"redirect_map"`
+	VipArr      *ebpf.MapSpec `ebpf:"vip_arr"`
 }
 
 // bpfObjects contains all objects after they have been loaded into the kernel.
@@ -86,11 +87,13 @@ func (o *bpfObjects) Close() error {
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfMaps struct {
 	RedirectMap *ebpf.Map `ebpf:"redirect_map"`
+	VipArr      *ebpf.Map `ebpf:"vip_arr"`
 }
 
 func (m *bpfMaps) Close() error {
 	return _BpfClose(
 		m.RedirectMap,
+		m.VipArr,
 	)
 }
 
