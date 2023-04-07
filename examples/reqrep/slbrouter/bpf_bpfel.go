@@ -13,7 +13,7 @@ import (
 	"github.com/cilium/ebpf"
 )
 
-type bpfMacaddr struct{ Mac [6]int8 }
+type bpfMacaddr struct{ Mac [6]uint8 }
 
 // loadBpf returns the embedded CollectionSpec for bpf.
 func loadBpf() (*ebpf.CollectionSpec, error) {

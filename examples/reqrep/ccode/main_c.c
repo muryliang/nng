@@ -91,6 +91,29 @@ int construct_add_sa(char *buf, char *src_ip, char *dst_ip,
     return len;
 }
 
+int construct_del_sa(char *buf, uint32_t spi) {
+
+    Slb__DelSaReq req;
+
+    slb__del_sa_req__init(&req);
+    int len;
+
+    req.spi = spi;
+
+    // include header here
+    len = slb__del_sa_req__get_packed_size(&req) + 8; // 8 is sizeof(len) + sizeof(op)
+
+    if (!buf) {
+        return len;
+    }
+
+    slb__del_sa_req__pack(&req, buf + 8);
+    *(uint32_t*)buf = htonl(len);
+    *(uint32_t*)(buf + 4) = htonl(DEL_SA);
+
+    return len;
+}
+
 int resolve_resp(char *buf, int len) {
 
     Slb__StatusResp *resp;
@@ -118,7 +141,7 @@ int resolve_resp(char *buf, int len) {
 }
 
 int
-node1(const char *url)
+node1(const char *url, uint32_t spi, char *srcip, char *dstip, char *tmplsrcip, char *tmpldstip)
 {
         nng_socket sock;
         int rv;
@@ -133,25 +156,15 @@ node1(const char *url)
                 fatal("nng_dial", rv);
         }
 
-        struct timespec t1, t2;
-        clock_gettime(CLOCK_REALTIME, &t1);
-        int total_i = 100;
+//        struct timespec t1, t2;
+//        clock_gettime(CLOCK_REALTIME, &t1);
+        int total_i = 1;
         for (i = 1; i <= total_i;i++){
 
             // construct data here
-            char *srcip = "192.168.101.%d";
-            char *dstip = "192.168.102.%d";
-            char *tmplsrcip = "192.168.122.173";
-            char *tmpldstip = "172.16.2.173";
-            uint32_t spi;
             int bufsize;
-            char buf_src_ip[20] = {0};
-            char buf_dst_ip[20] = {0};
 
-            sprintf(buf_src_ip, srcip, i);
-            sprintf(buf_dst_ip, dstip, i);
-
-            bufsize = construct_add_sa(NULL, buf_src_ip, buf_dst_ip, tmplsrcip, tmpldstip, i);
+            bufsize = construct_add_sa(NULL, srcip, dstip, tmplsrcip, tmpldstip, spi);
             if (bufsize < 0) {
                 printf("some error\n");
                 return -1;
@@ -161,9 +174,9 @@ node1(const char *url)
                 printf("can not alloc mem %d size\n", bufsize);
                 return -1;
             }
-            assert(construct_add_sa(buf, buf_src_ip, buf_dst_ip, tmplsrcip, tmpldstip, i) == bufsize);
+            assert(construct_add_sa(buf, srcip, dstip, tmplsrcip, tmpldstip, spi) == bufsize);
 
-            printf("send src %s dst %s tmplsrc %s tmpdst %s spi %d\n", buf_src_ip, buf_dst_ip, tmplsrcip, tmpldstip, i);
+            printf("add_sa: send src %s dst %s tmplsrc %s tmpdst %s spi %d\n", srcip, dstip, tmplsrcip, tmpldstip, spi);
             if ((rv = nng_send(sock, buf, bufsize, 0)) != 0) {
                     fatal("nng_send", rv);
             }
@@ -173,10 +186,65 @@ node1(const char *url)
             resolve_resp(recvbuf, recv_sz);
 //            printf("count %d, receive data size %d\n", i, recv_sz);  
 //            dump(recvbuf, recv_sz);
-            nng_msleep(1000);
+//            nng_msleep(1000);
         }
-        clock_gettime(CLOCK_REALTIME, &t2);
-        printf("count %d, time %ld\n", i, ((t2.tv_sec - t1.tv_sec) * 1000000000 + t2.tv_nsec - t1.tv_nsec) / 1000000);
+//        clock_gettime(CLOCK_REALTIME, &t2);
+//        printf("count %d, time %ld\n", i, ((t2.tv_sec - t1.tv_sec) * 1000000000 + t2.tv_nsec - t1.tv_nsec) / 1000000);
+        nng_free(buf, recv_sz);
+        nng_close(sock);
+        return (0);
+}
+
+int
+node1_del(const char *url, uint32_t spi)
+{
+        nng_socket sock;
+        int rv;
+        size_t recv_sz;
+        char *buf = NULL, *recvbuf = NULL;
+        int i;
+
+        if ((rv = nng_req0_open(&sock)) != 0) {
+                fatal("nng_socket", rv);
+        }
+        if ((rv = nng_dial(sock, url, NULL, 0)) != 0) {
+                fatal("nng_dial", rv);
+        }
+
+//        struct timespec t1, t2;
+//        clock_gettime(CLOCK_REALTIME, &t1);
+        int total_i = 1;
+        for (i = 1; i <= total_i;i++){
+
+            // construct data here
+            int bufsize;
+
+            bufsize = construct_del_sa(NULL, spi);
+            if (bufsize < 0) {
+                printf("some error\n");
+                return -1;
+            }
+            buf = malloc(bufsize);
+            if (!buf) {
+                printf("can not alloc mem %d size\n", bufsize);
+                return -1;
+            }
+            assert(construct_del_sa(buf, spi) == bufsize);
+
+            printf("del_sa: send spi %d\n", spi);
+            if ((rv = nng_send(sock, buf, bufsize, 0)) != 0) {
+                    fatal("nng_send", rv);
+            }
+            if ((rv = nng_recv(sock, &recvbuf, &recv_sz, NNG_FLAG_ALLOC)) != 0) {
+                    fatal("nng_recv", rv);
+            }
+            resolve_resp(recvbuf, recv_sz);
+//            printf("count %d, receive data size %d\n", i, recv_sz);  
+//            dump(recvbuf, recv_sz);
+//            nng_msleep(1000);
+        }
+//        clock_gettime(CLOCK_REALTIME, &t2);
+//        printf("count %d, time %ld\n", i, ((t2.tv_sec - t1.tv_sec) * 1000000000 + t2.tv_nsec - t1.tv_nsec) / 1000000);
         nng_free(buf, recv_sz);
         nng_close(sock);
         return (0);
@@ -186,9 +254,13 @@ node1(const char *url)
 int
 main(int argc, char **argv)
 {
-    if (argc >= 2)
-        return node1(argv[1]);
+    if (argc == 7) {
+        return node1(argv[1], strtol(argv[2], NULL, 0), argv[3], argv[4], argv[5], argv[6]);
+    } else if (argc == 3) {
+        return node1_del(argv[1], strtol(argv[2], NULL, 0));
+    }
 
-    fprintf(stderr, "Usage: reqrep <URL>\n");
+    fprintf(stderr, "Usage addsa: reqrep <URL> spi src dst tmplsrc tmpldst\n");
+    fprintf(stderr, "Usage delsa: reqrep <URL> spi\n");
     return 1;
 }

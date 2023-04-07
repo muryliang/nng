@@ -12,7 +12,7 @@
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 struct macaddr {
-    char mac[ETH_ALEN];
+    __u8 mac[ETH_ALEN];
 };
 
 struct {

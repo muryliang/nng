@@ -265,6 +265,7 @@ func recvCfg(laddr string) {
 	}
 }
 
+// handle maponoff case here
 func doRouter(innerIP string, outerIP string) {
     var err error
 
@@ -285,33 +286,59 @@ func doRouter(innerIP string, outerIP string) {
 
         // come here from map change or cfg change, so will encounter update cur from 0 to 0 
         curVer := atomic.LoadInt64(&CurSyncVer)
+        var installCfgs []config.VerCfg
+
         if lastSyncVer < curVer {
-            fmt.Printf("router: update cur from %d to %d\n", lastSyncVer, curVer)
-        } else {
+            cfgLock.Lock()
+            installCfgs = cfgs[lastSyncVer+1:curVer+1]
+            cfgLock.Unlock()
+            fmt.Printf("router: begin update cur from %d to %d\n", lastSyncVer, curVer)
+        } else if lastSyncVer == curVer {
             fmt.Printf("router: only map topo changed\n")
+        } else {
+            // last > cur, so delete first, then do again
+            lastSyncVer = 0
+            err = router.DeleteAll()
+            if err != nil {
+                die("router failed with error %v", err)
+            }
+            // do again here for adding from startup
+            notifyRt()
+            continue
         }
 
         // if map changed, we need recalculate, so recal and cal topo change
         // if cfg update, we need recalculate also, so recal also
         
         // create a copy, so we will not block other route who access config and map
+        is_on := false
         onoffLock.Lock()
         copyOnoffMap := make(map[string][]byte)
         for k, v := range onoffMap {
             copyOnoffMap[k] = v
+            if v != nil {
+                is_on = true
+            }
         }
         onoffLock.Unlock()
+        if !is_on {
+            lastSyncVer = 0
+            err = router.DeleteAll()
+            if err != nil {
+                die("router failed with error %v", err)
+            }
+            continue
+        }
 
-        cfgLock.Lock()
-        installCfgs := cfgs[lastSyncVer+1:curVer+1]
-        cfgLock.Unlock()
 
-        lastSyncVer = curVer
+        // if all sub down, we should delete all maps
+        // if at least on is up, we can recal and install
         fmt.Printf("========== do recal and install \n")
-        err = router.RecalAndInstall(installCfgs, copyOnoffMap)
+        err := router.RecalAndInstall(installCfgs, copyOnoffMap)
         if err != nil {
             die("router failed with error %v", err)
         }
+        lastSyncVer = curVer
     }
 }
 
@@ -370,6 +397,8 @@ func syncCfg_lbside(serverId uint64) {
         cfgLock.Lock()
         curCfgs := cfgs[:]
         cfgLock.Unlock()
+
+        var upMachine int64 = 0
 
         var wg sync.WaitGroup
         wg.Add(len(syncMap))
@@ -434,13 +463,20 @@ func syncCfg_lbside(serverId uint64) {
 
                     if tgt.SyncVer == curLastVer {
                     // test equal here, not start of for, because we need at least one cycle to know if submachine is ok or during a quick stop and start
+                        atomic.AddInt64(&upMachine, 1)
                         break
                     }
                 }
             }(addr, target)
         }
         wg.Wait()
-        atomic.StoreInt64(&CurSyncVer, curCfgs[len(curCfgs)-1].Ver)
+        // when at least one up, we continue update ver, todo: maybe store onoffmap copy here in atomic, together with ver
+        // when all is down, we should set ver to 0, then router know to delete all
+        if atomic.LoadInt64(&upMachine) == 0 {
+            atomic.StoreInt64(&CurSyncVer, 0)
+        } else {
+            atomic.StoreInt64(&CurSyncVer, curCfgs[len(curCfgs)-1].Ver)
+        }
         notifyRt()
         fmt.Printf("loop done\n")
 	}
@@ -643,11 +679,11 @@ func hb_lbside(laddr string) {
             // client side can control hb response when sync cfg failed some time, retire and warn to hb when needed
             // only update hash when we finish sync, so how
         }
-        res, err := json.MarshalIndent(onoffMap, "", " ")
-        if err != nil {
-            fmt.Println("some error json", err)
+        fmt.Printf("========== dump onoffmap ========\n")
+        for k, v := range onoffMap {
+            fmt.Printf("%s => %#v\n", k, v)
         }
-        fmt.Println(string(res))
+        fmt.Printf("========== dump onoffmap over ========\n")
         if recv_cnt == total_cnt {
             time.Sleep(time.Millisecond * time.Duration(*HB_TIMEOUT))
         }
@@ -676,6 +712,7 @@ func hb_subside(laddr string, raddr string) {
 	if err = sock.Dial(dialurl); err != nil {
 		die("can't dial on respondent socket: %s", err.Error())
 	}
+    i := 0
 	for {
         fmt.Println("receiving...")
 		if msg, err = sock.Recv(); err != nil {
@@ -686,7 +723,8 @@ func hb_subside(laddr string, raddr string) {
             die("server hb info not correct")
         }
 
-		fmt.Printf("client: responding hb %s\n", laddr)
+        i++
+		fmt.Printf("client: responding hb %d %s\n", i, laddr)
         mac, err := util.GetMacFromAddr(laddr)
         if err != nil {
             die("client hb can not get mac")

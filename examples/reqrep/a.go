@@ -46,7 +46,8 @@ func main() {
     var c uint64 = (uint64(a) << 32) | uint64(b)
     var d []byte = []byte{0x12, 0x34, 0x56, 0x78}
     var e uint64 = 128
-    fmt.Printf("c is %x, %x, %d, %#v\n", c, binary.BigEndian.Uint32(d), int(e), d[3:4])
+    var f []byte = []byte{}
+    fmt.Printf("c is %x, %x, %d, %#v, %#v\n", c, binary.BigEndian.Uint32(d), int(e), d[3:4], f[1:1])
     d = append(d, []byte{0x11}...)
     fmt.Printf("d %v\n", d)
 

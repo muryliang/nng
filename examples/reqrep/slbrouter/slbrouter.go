@@ -14,7 +14,9 @@ import (
     "bytes"
     "encoding/binary"
     "errors"
+    "strings"
 
+	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
     "google.golang.org/protobuf/proto"
 
@@ -40,7 +42,7 @@ type ipsecInfo struct {
     // use this when delete, because delete may
     // only have spi, we need to know what key 
     // so we can delete
-    key []byte
+    key [8]byte
 }
 
 type SlbRouter struct {
@@ -53,25 +55,28 @@ type SlbRouter struct {
 
     // maybe these two should be in alg callback's struct
 //    prevOnoffMap map[string]bool
-    curMap map[string][]byte
+    curMap map[[8]byte][]byte
 //    innerNewMap map[string][]byte
 
     xdpobjs bpfObjects
     xdplink link.Link
 }
 
-func (r *SlbRouter) adjustTopo(newMap map[string][]byte, onoffMap map[string][]byte, maclist []string) {
+func (r *SlbRouter) adjustTopo(newMap map[[8]byte][]byte, onoffMap map[string][]byte, maclist [][]byte) {
+    // topo change, some addr is off
+    // if not found that mac in maclist
     for key, val := range r.curMap {
-        if v, ok := onoffMap[key]; ok {
-            if v == nil { // key in range and is off
-                hashres := util.HashFromBytes([]byte(key), len(maclist))
-                newMap[key] = onoffMap[maclist[hashres]]
-            } else {
-            // key in range and on
+        exist := false
+        for _, addr := range maclist {
+            if bytes.Equal(val, addr) {
+                exist = true
                 newMap[key] = val
+                break
             }
-        } else { // key not in range, just add
-            newMap[key] = val
+        }
+        if !exist {
+            hashres := util.HashFromBytes(key[:], len(maclist))
+            newMap[key] = maclist[hashres]
         }
     }
 }
@@ -79,7 +84,7 @@ func (r *SlbRouter) adjustTopo(newMap map[string][]byte, onoffMap map[string][]b
 // todo: we may should not lock onoffmap for so long, just copy a duplicate for use
 // we may use alg func callback here, but currently only
 // rr supported, so every time recalculate
-func (r *SlbRouter) recalMap(cfgs []config.VerCfg, onoffMap map[string][]byte) (map[string][]byte, map[string][]byte, error) {
+func (r *SlbRouter) recalMap(cfgs []config.VerCfg, onoffMap map[string][]byte) (map[[8]byte][]byte, map[[8]byte][]byte, error) {
     /* 
         create a index list(string) to onoffstring's key
         copy old map as new map first
@@ -92,14 +97,17 @@ func (r *SlbRouter) recalMap(cfgs []config.VerCfg, onoffMap map[string][]byte) (
     */
     // index list for hash use
     var err error
-    var maclist []string
-    for key, val := range onoffMap {
+    var maclist [][]byte
+    for _, val := range onoffMap {
         if val != nil {
-            maclist = append(maclist, key)
+            maclist = append(maclist, val)
         }
     }
     // copy map, and adjust for topo change here
-    newMap := make(map[string][]byte)
+    newMap := make(map[[8]byte][]byte)
+    if len(maclist) == 0 {
+        return r.curMap, nil, nil
+    }
     r.adjustTopo(newMap, onoffMap, maclist)
 
     // apply new vercfgs here
@@ -121,8 +129,8 @@ func (r *SlbRouter) recalMap(cfgs []config.VerCfg, onoffMap map[string][]byte) (
                 binary.BigEndian.PutUint32(hashkeybytes, sareq.GetSpi())
                 hashkeybytes = append(hashkeybytes, []byte{0, 0, 0, 0}...)
                 hashres := util.HashFromBytes(hashkeybytes, len(maclist))
-                newMap[string(hashkeybytes)] = onoffMap[maclist[hashres]]
-                r.spiMap[sareq.GetSpi()] = ipsecInfo{key:hashkeybytes}
+                newMap[([8]byte)(hashkeybytes)] = maclist[hashres]
+                r.spiMap[sareq.GetSpi()] = ipsecInfo{key:([8]byte)(hashkeybytes)}
             } else if srctmpl.String() == r.OuterIP {
                 // install for egress, so for internal subnet key is internalip
                 // key is {innersrcip,innerdstip}
@@ -130,8 +138,8 @@ func (r *SlbRouter) recalMap(cfgs []config.VerCfg, onoffMap map[string][]byte) (
                 hashkeybytes = append(hashkeybytes, sareq.GetHostDst()...)
                 hashres := util.HashFromBytes(hashkeybytes, len(maclist))
                 // use hash as index to get onoffmap's key, then reterieve its mac addr
-                newMap[string(hashkeybytes)] = onoffMap[maclist[hashres]]
-                r.spiMap[sareq.GetSpi()] = ipsecInfo{key:hashkeybytes}
+                newMap[([8]byte)(hashkeybytes)] = maclist[hashres]
+                r.spiMap[sareq.GetSpi()] = ipsecInfo{key:([8]byte)(hashkeybytes)}
 
             } else {
                 return nil, nil, errors.New("addreq's src/dst not us")
@@ -144,12 +152,34 @@ func (r *SlbRouter) recalMap(cfgs []config.VerCfg, onoffMap map[string][]byte) (
             }
             spi := sareq.GetSpi()
             if hashkeybytes, ok := r.spiMap[spi]; ok {
-                delete(newMap, string(hashkeybytes.key)) 
+                delete(newMap, hashkeybytes.key) 
                 delete(r.spiMap, spi)
             }
         }
     }
+    fmt.Printf("========= dump map topo ==============\n")
+    fmt.Printf("curmap %#v\n", r.curMap)
+    fmt.Printf("newmap %#v\n", newMap)
+    fmt.Printf("========= dump map topo over ==============\n")
     return r.curMap, newMap, nil
+}
+
+
+func (r *SlbRouter) DeleteAll() error {
+    // only do delete here, and not update ver
+    var err error
+    for k := range r.spiMap {
+        delete(r.spiMap, k)
+    }
+    for k := range r.curMap {
+        delete(r.curMap, k)
+        err = r.xdpobjs.RedirectMap.Delete(&k)
+        if err != nil {
+            fmt.Printf("only delete %s error %v\n", k, err)
+            return err
+        }
+    }
+    return nil
 }
 
 // macMap [string][]byte as []byte can not be map key, but convert to string vice-verse is possible
@@ -163,6 +193,7 @@ func (r *SlbRouter) RecalAndInstall(cfgs []config.VerCfg, onoffMap map[string][]
     if err != nil {
         return err
     }
+
     // todo:
     // for old not in new: delete
     for k, macaddr := range curmap {
@@ -181,22 +212,25 @@ func (r *SlbRouter) RecalAndInstall(cfgs []config.VerCfg, onoffMap map[string][]
         origV, ok := curmap[k]
         if !ok {
             // add new
-            fmt.Printf("adding %s:%v\n", k, macaddr)
+            fmt.Printf("\nadding %#v:%#v\n", k, macaddr)
             err = r.xdpobjs.RedirectMap.Put(&k, &macaddr)
         } else if !bytes.Equal(origV, macaddr) {
             // modify map
-            fmt.Printf("modify %s:%v=>%v\n", k, origV, macaddr)
+            fmt.Printf("\nmodify %#v:%#v=>%#v\n", k, origV, macaddr)
             err = r.xdpobjs.RedirectMap.Put(&k, &macaddr)
         } else {
             // nothing done here
         }
         if err != nil {
-            fmt.Printf("put %s error %v\n", k, err)
+            fmt.Printf("put %#v error %v\n", k, err)
             return err
         }
         // update curmap
         curmap[k] = macaddr
     }
+    fmt.Printf("\n=========== show map after install\n")
+    res, _ := formatMapContents(r.xdpobjs.RedirectMap)
+    fmt.Printf("%s\n\n", res)
     return nil
 }
 
@@ -205,7 +239,7 @@ func (r *SlbRouter) Init() error {
     if r.InnerIP == "" || r.OuterIP == "" {
         return errors.New("no ip specified")
     }
-    r.curMap = make(map[string][]byte)
+    r.curMap = make(map[[8]byte][]byte)
     r.spiMap = make(map[uint32]ipsecInfo)
     r.InnerIntf, err = util.GetIntfFromAddr(r.InnerIP)
     if err != nil {
@@ -225,7 +259,7 @@ func (r *SlbRouter) Run() error {
     // load xdp program
 	// Load pre-compiled programs into the kernel.
 	if err := loadBpfObjects(&r.xdpobjs, nil); err != nil {
-		fmt.Printf("loading objects: %s", err)
+		fmt.Printf("loading objects: %s\n", err)
 	}
 //	defer objs.Close()
 
@@ -236,27 +270,25 @@ func (r *SlbRouter) Run() error {
 		Interface: r.InnerIntf.Index,
 	})
 	if err != nil {
-		fmt.Printf("could not attach XDP program: %s", err)
+		fmt.Printf("could not attach XDP program: %s\n", err)
         return err
 	}
 //	defer l.Close()
 
-	fmt.Printf("Attached XDP program to inner iface %q (index %d)", r.InnerIntf.Name, r.InnerIntf.Index)
+	fmt.Printf("Attached XDP program to inner iface %q (index %d)\n", r.InnerIntf.Name, r.InnerIntf.Index)
     return nil
 
 }
 
-/*
 func formatMapContents(m *ebpf.Map) (string, error) {
 	var (
 		sb  strings.Builder
-		key uint32
-		val uint32
+		key [6]byte
+		val [6]byte
 	)
 	iter := m.Iterate()
 	for iter.Next(&key, &val) {
-		sb.WriteString(fmt.Sprintf("\t%d => %d\n", key, val))
+		sb.WriteString(fmt.Sprintf("\t%#v => %#v\n", key, val))
 	}
 	return sb.String(), iter.Err()
 }
-*/
