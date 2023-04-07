@@ -291,9 +291,10 @@ func (r *SlbRouter) Run() error {
 //	defer objs.Close()
 
 // todo: we only test inner now
+// and if internal and outer are the same, we combine two functions
 	// Attach the program.
 	r.xdplink, err = link.AttachXDP(link.XDPOptions{
-		Program:   r.xdpobjs.XdpPass,
+		Program:   r.xdpobjs.XdpRedirectInternal,
 		Interface: r.InnerIntf.Index,
 	})
 	if err != nil {
@@ -302,16 +303,14 @@ func (r *SlbRouter) Run() error {
 	}
 //	defer l.Close()
 
-    innerip := []byte(net.ParseIP(r.InnerIP))
-    outerip := []byte(net.ParseIP(r.OuterIP))
-    err = r.xdpobjs.VipArr.Put(&INNER_VIP_INDEX, &innerip)
+    err = r.xdpobjs.MacArr.Put(&INNER_VIP_INDEX, &r.InnerIntf.HardwareAddr)
     if err != nil {
-        fmt.Printf("failed to set inner ip")
+        fmt.Printf("failed to set inner hwaddr")
         return err
     }
-    err = r.xdpobjs.VipArr.Put(&OUTER_VIP_INDEX, &outerip)
+    err = r.xdpobjs.MacArr.Put(&OUTER_VIP_INDEX, &r.OuterIntf.HardwareAddr)
     if err != nil {
-        fmt.Printf("failed to set outer ip")
+        fmt.Printf("failed to set outer hwaddr")
         return err
     }
 	fmt.Printf("Attached XDP program to inner iface %q (index %d)\n", r.InnerIntf.Name, r.InnerIntf.Index)

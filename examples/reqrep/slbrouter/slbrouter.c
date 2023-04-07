@@ -15,8 +15,8 @@ struct macaddr {
     __u8 mac[ETH_ALEN];
 };
 
-#define INNER 0
-#define OUTER 1
+#define INNER_INDEX 0
+#define OUTER_INDEX 1
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
@@ -25,16 +25,18 @@ struct {
 	__type(value, struct macaddr);
 } redirect_map SEC(".maps");
 
+// no need to use ip arr, just test hash of daddr|saddr
+// if no match, just xdp_pass
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(max_entries, 2);
 	__type(key, __u32);
-	__type(value, __u32);
-} vip_arr SEC(".maps");
+	__type(value, struct macaddr);
+} mac_arr SEC(".maps");
 
 
 SEC("xdp")
-int xdp_pass(struct xdp_md *ctx) {
+int xdp_pass_test(struct xdp_md *ctx) {
 	int action = XDP_PASS;
 	void *data     = (void *)(long)ctx->data;
 	void *data_end = (void *)(long)ctx->data_end;
@@ -79,7 +81,7 @@ out:
 	return action;
 }
 
-#if 0
+#if 1
 SEC("xdp")
 int xdp_pass_ig(struct xdp_md *ctx) {
 	return XDP_PASS;
@@ -233,7 +235,7 @@ out:
 	return action;
 }
 
-// redirect internal packet to dst address to the fixed ether swan11
+// redirect internal packet for inner_vip
 SEC("xdp")
 int xdp_redirect_internal(struct xdp_md *ctx) {
 	void *data_end = (void *)(long)ctx->data_end;
@@ -243,7 +245,6 @@ int xdp_redirect_internal(struct xdp_md *ctx) {
 	struct iphdr *iphdr;
 	int eth_type, ip_type;
 	int action = XDP_PASS;
-	int i;
 
 	/* These keep track of the next header type and iterator pointer */
 	nh.pos = data;
@@ -260,120 +261,29 @@ int xdp_redirect_internal(struct xdp_md *ctx) {
 	if (ip_type == -1) {
 		goto out;
 	}
-	// inside ip, we may see udp(esp) or udp(marker(ike))
-	// or just raw esp
-	unsigned char local_dst[ETH_ALEN] = {
-		0x66,
-		0x43,
-		0x72,
-		0xdf,
-		0x90,
-		0x7e,
-	};
-	unsigned char local_ip[4] = {
-		192,
-		168,
-		108,
-		51,
-	};
 
-	for (i = 0; i < ETH_ALEN; i++) {
-		if (eth->h_dest[i] != local_dst[i]) {
-			goto out;
-		}
-	}
-
-	int should_redir    = 0;
-	unsigned char *dptr = (void *)&iphdr->daddr;
-	for (i = 0; i < 4; i++) {
-		if (dptr[i] != local_ip[i]) {
-			// this is local's vip
-			should_redir = 1; // not for local, redirect it, 50 also redirect
-							  // arp will pass, so first arp for 50, get mac, then pass pkg to here, check not 51, redirect it
-			break;
-		}
-	}
-	if (should_redir == 0) { // dst is 51, pass it
+    // get local mac 
+	struct macaddr *local_mac_rec;
+    __u32 local_mac_key = INNER_INDEX;
+	local_mac_rec = bpf_map_lookup_elem(&mac_arr, &local_mac_key);
+	if (!local_mac_rec) {
+		bpf_printk("no inner local mac found\n");
 		goto out;
 	}
 
-	// subnet 108 to 109
-	unsigned char src_ip1[4] = {
-		192,
-		168,
-		108,
-		0,
-	};
-	// subnet 110 to 111
-	unsigned char src_ip2[4] = {
-		192,
-		168,
-		110,
-		0,
-	};
+    // get redir mac
+    struct macaddr *redir_mac_rec;
+    __u64 redir_key = (__u64)iphdr->saddr << 32 | (__u64)iphdr->daddr;
 
-	unsigned char *modify_dst            = NULL;
-	unsigned char modify_dst11[ETH_ALEN] = {
-		0x5e,
-		0xe8,
-		0x95,
-		0xea,
-		0x79,
-		0x6d,
-	};
-	unsigned char modify_dst12[ETH_ALEN] = {
-		0xea,
-		0x5b,
-		0xbc,
-		0x2e,
-		0xc3,
-		0x91,
-	};
-
-	unsigned char *sptr = (void *)&iphdr->saddr;
-	int should_assign   = 1;
-	for (i = 0; i < 3; i++) { // only compare subnet for test
-		if (sptr[i] != src_ip1[i]) {
-			should_assign = 0;
-			break;
-		}
-	}
-	if (should_assign) {
-		modify_dst = modify_dst11;
-		bpf_printk("subnet forward to 11\n");
-	}
-
-	if (!modify_dst) {
-		should_assign = 1;
-		for (i = 0; i < 3; i++) { // only compare subnet for test
-			if (sptr[i] != src_ip2[i]) {
-				should_assign = 0;
-				break;
-			}
-		}
-		if (should_assign) {
-			modify_dst = modify_dst12;
-			bpf_printk("subnet forward to 12\n");
-		}
-	}
-
-	if (!modify_dst) {
-		bpf_printk("src ip not in subnet domain %d.%d.%d.%d\n", sptr[0], sptr[1], sptr[2], sptr[3]);
+	redir_mac_rec = bpf_map_lookup_elem(&redirect_map, &redir_key);
+	if (!redir_mac_rec) {
 		goto out;
 	}
+	__builtin_memcpy(eth->h_source, local_mac_rec->mac, ETH_ALEN);
+	__builtin_memcpy(eth->h_dest, redir_mac_rec->mac, ETH_ALEN);
 
-	// only redirect esp package
-	__builtin_memcpy(eth->h_dest, modify_dst, ETH_ALEN);
-	/*
-	 * if don't change this, some bug happened to bridge,
-	 * after first pkt redirected, brctl showmacs will learn
-	 * source mac as comming from here port, so next forward
-	 * to that wrong port, and pkt missed
-	 */
-	__builtin_memcpy(eth->h_source, local_dst, ETH_ALEN);
-	//	action = bpf_redirect(ifindex, 0);
 	action = XDP_TX;
-	//    bpf_printk("subnet redirected ifindex %d", ctx->ingress_ifindex);
+	bpf_printk("subnet redirected ifindex %d", ctx->ingress_ifindex);
 
 out:
 	return action;

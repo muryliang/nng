@@ -56,15 +56,20 @@ type bpfSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfProgramSpecs struct {
-	XdpPass *ebpf.ProgramSpec `ebpf:"xdp_pass"`
+	XdpIcmp             *ebpf.ProgramSpec `ebpf:"xdp_icmp"`
+	XdpPassIg           *ebpf.ProgramSpec `ebpf:"xdp_pass_ig"`
+	XdpPassTest         *ebpf.ProgramSpec `ebpf:"xdp_pass_test"`
+	XdpRedirectFunc     *ebpf.ProgramSpec `ebpf:"xdp_redirect_func"`
+	XdpRedirectInternal *ebpf.ProgramSpec `ebpf:"xdp_redirect_internal"`
+	XdpShowUdp          *ebpf.ProgramSpec `ebpf:"xdp_show_udp"`
 }
 
 // bpfMapSpecs contains maps before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfMapSpecs struct {
+	MacArr      *ebpf.MapSpec `ebpf:"mac_arr"`
 	RedirectMap *ebpf.MapSpec `ebpf:"redirect_map"`
-	VipArr      *ebpf.MapSpec `ebpf:"vip_arr"`
 }
 
 // bpfObjects contains all objects after they have been loaded into the kernel.
@@ -86,14 +91,14 @@ func (o *bpfObjects) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfMaps struct {
+	MacArr      *ebpf.Map `ebpf:"mac_arr"`
 	RedirectMap *ebpf.Map `ebpf:"redirect_map"`
-	VipArr      *ebpf.Map `ebpf:"vip_arr"`
 }
 
 func (m *bpfMaps) Close() error {
 	return _BpfClose(
+		m.MacArr,
 		m.RedirectMap,
-		m.VipArr,
 	)
 }
 
@@ -101,12 +106,22 @@ func (m *bpfMaps) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfPrograms struct {
-	XdpPass *ebpf.Program `ebpf:"xdp_pass"`
+	XdpIcmp             *ebpf.Program `ebpf:"xdp_icmp"`
+	XdpPassIg           *ebpf.Program `ebpf:"xdp_pass_ig"`
+	XdpPassTest         *ebpf.Program `ebpf:"xdp_pass_test"`
+	XdpRedirectFunc     *ebpf.Program `ebpf:"xdp_redirect_func"`
+	XdpRedirectInternal *ebpf.Program `ebpf:"xdp_redirect_internal"`
+	XdpShowUdp          *ebpf.Program `ebpf:"xdp_show_udp"`
 }
 
 func (p *bpfPrograms) Close() error {
 	return _BpfClose(
-		p.XdpPass,
+		p.XdpIcmp,
+		p.XdpPassIg,
+		p.XdpPassTest,
+		p.XdpRedirectFunc,
+		p.XdpRedirectInternal,
+		p.XdpShowUdp,
 	)
 }
 
