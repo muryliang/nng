@@ -3,8 +3,16 @@ howto run in netns:
     - sh slbroute/build.sh
     - sh slbroute/do_load.sh
     - run your program somewhere
+        - build:
+            - sh slbroute/build.sh
+            - sh build.sh
         - server: 
             /opt/cmd.sh lb11 ./lb -laddr 172.16.1.51 -raddr 172.16.1.11,172.16.1.12 -vout 172.16.1.50 -vin 192.168.108.50
+        - client
+            /opt/cmd.sh swan11 ./lb -sub -laddr 172.16.1.11 -raddr 172.16.1.51 -subout tunnel11_in -subin end11_in
+        - ccode:
+            - sh run.sh l 0x1 108 109 0 # add local to remote
+            - sh run.sh r 0x2 109 108 0 # add remote to local
 
     - how to delete
         - sh slbroute/do_unload.sh
@@ -27,4 +35,3 @@ next:
 C side: cd ccode; sh run.sh $from $to [ delete ]
 server: go run hb_sync.go -laddr 192.168.122.173 -raddr 192.168.122.173 -vin 192.168.122.173 -vout 192.168.122.173 -hbtmo 1000
 client: go run hb_sync.go -sub -laddr 192.168.122.173 -raddr 192.168.122.173
-/opt/cmd.sh swan11 ./lb -sub -laddr 172.16.1.11 -raddr 172.16.1.51 -subIntf tunnel11_in

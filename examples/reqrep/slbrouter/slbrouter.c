@@ -220,7 +220,9 @@ int xdp_redirect_outer(struct xdp_md *ctx) {
 		goto out;
 	}
     struct macaddr *redir_mac_rec;
-    __u64 redir_key = (__u64)esphdr->spi << 32 | (__u64)0;
+    // little endian, so first byte is littlt byte, must set it spi
+    __u64 redir_key = ((__u64)0 << 32) | (__u64)esphdr->spi;
+	bpf_printk("outer get spi 0x%x redirkey %lx\n", bpf_ntohl(esphdr->spi), redir_key);
 
 	redir_mac_rec = bpf_map_lookup_elem(&redirect_map, &redir_key);
 	if (!redir_mac_rec) {
@@ -263,7 +265,7 @@ int xdp_redirect_inner(struct xdp_md *ctx) {
 
     // get local mac 
 	struct macaddr *local_mac_rec;
-    __u32 local_mac_key = OUTER_INDEX;
+    __u32 local_mac_key = INNER_INDEX;
 	local_mac_rec = bpf_map_lookup_elem(&mac_arr, &local_mac_key);
 	if (!local_mac_rec) {
 		bpf_printk("no outer local mac found\n");
@@ -284,7 +286,10 @@ int xdp_redirect_inner(struct xdp_md *ctx) {
 
     // get redir mac
     struct macaddr *redir_mac_rec;
-    __u64 redir_key = (__u64)iphdr->saddr << 32 | (__u64)iphdr->daddr;
+    // todo: macaddr should be a info struct, including netmask and mac addr
+    // saddr and daddr are big endian, shoud AND 0x00ffffff, and source is at head (when read as []byte), so should be at little side
+    __u64 redir_key = (__u64)(iphdr->daddr & 0x00ffffff) << 32 | (__u64)(iphdr->saddr & 0x00ffffff);
+    bpf_printk("inner from 0x%x to 0x%x, key %lx\n", bpf_ntohl(iphdr->saddr), bpf_ntohl(iphdr->daddr), redir_key);
 
 	redir_mac_rec = bpf_map_lookup_elem(&redirect_map, &redir_key);
 	if (!redir_mac_rec) {
@@ -295,7 +300,7 @@ int xdp_redirect_inner(struct xdp_md *ctx) {
 	__builtin_memcpy(eth->h_dest, redir_mac_rec->mac, ETH_ALEN);
 
 	action = XDP_TX;
-	bpf_printk("subnet redirected src 0x%x, dst 0x%x\n", iphdr->saddr, iphdr->daddr);
+	bpf_printk("subnet redirected src 0x%x, dst 0x%x\n", bpf_ntohl(iphdr->saddr), bpf_ntohl(iphdr->daddr));
 
 out:
 	return action;

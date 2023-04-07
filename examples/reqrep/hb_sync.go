@@ -479,7 +479,15 @@ func subnet_installroute(icfgs []config.VerCfg) error {
             tmplsrcip := net.IP(sareq.GetTmplHostSrc())
             tmpldstip := net.IP(sareq.GetTmplHostDst())
             spi := sareq.GetSpi()
-            fmt.Printf("cfg client received add ver %d, op %s, src:%s/%d, dst:%s/%d,tmplsrc %s, tmpldst %s, spi:0x%x\n", icfg.Ver, config.Gmap[op], srcip.String(), srcipmask, dstip.String(), dstipmask, tmplsrcip.String(), tmpldstip.String(), spi)
+
+            var outflow bool = false
+            if _, err = util.GetIntfFromAddr(tmplsrcip.String()); err == nil {
+                // we are sending out
+                outflow = true
+            }
+            err = nil
+
+            fmt.Printf("out: %v, cfg client received add ver %d, op %s, src:%s/%d, dst:%s/%d,tmplsrc %s, tmpldst %s, spi:0x%x\n", outflow, icfg.Ver, config.Gmap[op], srcip.String(), srcipmask, dstip.String(), dstipmask, tmplsrcip.String(), tmpldstip.String(), spi)
 
             cmdstr = fmt.Sprintf("ip xfrm state add src %s dst %s proto esp spi 0x%x mode tunnel auth digest_null \"\" enc cipher_null \"\" ", tmplsrcip.String(), tmpldstip.String(), spi)
             cmd := exec.Command("bash", "-c", cmdstr)
@@ -487,27 +495,14 @@ func subnet_installroute(icfgs []config.VerCfg) error {
             if err != nil {
                 fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
             }
-            cmdstr = fmt.Sprintf("ip xfrm policy add src %s/%d dst %s/%d dir out ptype main tmpl src %s dst %s proto esp mode tunnel ", srcip.String(), srcipmask, dstip.String(), dstipmask, tmplsrcip.String(), tmpldstip.String())
-            cmd = exec.Command("bash", "-c", cmdstr)
-            err = cmd.Run()
-            if err != nil {
-                fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
-            }
-            cmdstr = fmt.Sprintf("ip xfrm policy add src %s/%d dst %s/%d dir in ptype main tmpl src %s dst %s proto esp mode tunnel ", dstip.String(), dstipmask, srcip.String(), srcipmask, tmpldstip.String(), tmplsrcip.String())
-            cmd = exec.Command("bash", "-c", cmdstr)
-            err = cmd.Run()
-            if err != nil {
-                fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
-            }
-            cmdstr = fmt.Sprintf("ip xfrm policy add src %s/%d dst %s/%d dir fwd ptype main tmpl src %s dst %s proto esp mode tunnel ", dstip.String(), dstipmask, srcip.String(), srcipmask, tmpldstip.String(), tmplsrcip.String())
-            cmd = exec.Command("bash", "-c", cmdstr)
-            err = cmd.Run()
-            if err != nil {
-                fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
-            }
+            if outflow {
+                cmdstr = fmt.Sprintf("ip xfrm policy add src %s/%d dst %s/%d dir out ptype main tmpl src %s dst %s proto esp mode tunnel ", srcip.String(), srcipmask, dstip.String(), dstipmask, tmplsrcip.String(), tmpldstip.String())
+                cmd = exec.Command("bash", "-c", cmdstr)
+                err = cmd.Run()
+                if err != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                }
 
-            // todo: maybe used this for policy add, so we need not add too much policy
-            if _, err = util.GetIntfFromAddr(tmplsrcip.String()); err == nil {
                 // we are adding for local esp, so add outer route
                 cmdstr = fmt.Sprintf("ip rule add to %s/%d table 15", dstip.String(), dstipmask)
                 cmd = exec.Command("bash", "-c", cmdstr)
@@ -521,7 +516,20 @@ func subnet_installroute(icfgs []config.VerCfg) error {
                 if err != nil {
                     fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
                 }
-
+            } else {
+                // already switched when c cide send, so need not switch here
+                cmdstr = fmt.Sprintf("ip xfrm policy add src %s/%d dst %s/%d dir in ptype main tmpl src %s dst %s proto esp mode tunnel ", srcip.String(), srcipmask, dstip.String(), dstipmask, tmplsrcip.String(), tmpldstip.String())
+                cmd = exec.Command("bash", "-c", cmdstr)
+                err = cmd.Run()
+                if err != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                }
+                cmdstr = fmt.Sprintf("ip xfrm policy add src %s/%d dst %s/%d dir fwd ptype main tmpl src %s dst %s proto esp mode tunnel ", srcip.String(), srcipmask, dstip.String(), dstipmask, tmplsrcip.String(), tmpldstip.String())
+                cmd = exec.Command("bash", "-c", cmdstr)
+                err = cmd.Run()
+                if err != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                }
             }
         } else if cfg.Op == config.OP_DEL_SA {
             sareq := &slbproto.DelSaReq{}
@@ -537,7 +545,16 @@ func subnet_installroute(icfgs []config.VerCfg) error {
             tmplsrcip := net.IP(sareq.GetTmplHostSrc())
             tmpldstip := net.IP(sareq.GetTmplHostDst())
             spi := sareq.GetSpi()
-            fmt.Printf("cfg client received delete ver %d spi:0x%x src %s/%d dst %s/%d\n", icfg, spi, srcip.String(), srcipmask, tmpldstip.String(), dstipmask)
+
+            var outflow bool = false
+            if _, err = util.GetIntfFromAddr(tmplsrcip.String()); err == nil {
+                // we are sending out
+                outflow = true
+            }
+            err = nil
+
+            fmt.Printf("out: %v, cfg client received delete ver %d spi:0x%x src %s/%d dst %s/%d\n", outflow, icfg, spi, srcip.String(), srcipmask, dstip.String(), dstipmask)
+
             cmdstr = fmt.Sprintf("ip xfrm state delete spi 0x%x src %s dst %s proto esp", spi, tmplsrcip.String(), tmpldstip.String())
             cmd := exec.Command("bash", "-c", cmdstr)
             err = cmd.Run()
@@ -545,25 +562,13 @@ func subnet_installroute(icfgs []config.VerCfg) error {
                 fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
             }
 
-            cmdstr = fmt.Sprintf("ip xfrm policy delete dir out src %s/%d dst %s/%d", srcip.String(), srcipmask, dstip.String(), dstipmask)
-            cmd = exec.Command("bash", "-c", cmdstr)
-            err = cmd.Run()
-            if err != nil {
-                fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
-            }
-            cmdstr = fmt.Sprintf("ip xfrm policy delete dir in src %s/%d dst %s/%d", dstip.String(), dstipmask, srcip.String(), srcipmask)
-            cmd = exec.Command("bash", "-c", cmdstr)
-            err = cmd.Run()
-            if err != nil {
-                fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
-            }
-            cmdstr = fmt.Sprintf("ip xfrm policy delete dir fwd src %s/%d dst %s/%d", dstip.String(), dstipmask, srcip.String(), srcipmask)
-            cmd = exec.Command("bash", "-c", cmdstr)
-            err = cmd.Run()
-            if err != nil {
-                fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
-            }
-            if _, err = util.GetIntfFromAddr(tmplsrcip.String()); err != nil {
+            if outflow {
+                cmdstr = fmt.Sprintf("ip xfrm policy delete dir out src %s/%d dst %s/%d", srcip.String(), srcipmask, dstip.String(), dstipmask)
+                cmd = exec.Command("bash", "-c", cmdstr)
+                err = cmd.Run()
+                if err != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                }
                 // we are adding for local esp, so add outer route
                 cmdstr = fmt.Sprintf("ip rule del to %s/%d table 15", dstip.String(), dstipmask)
                 cmd = exec.Command("bash", "-c", cmdstr)
@@ -577,7 +582,20 @@ func subnet_installroute(icfgs []config.VerCfg) error {
                 if err != nil {
                     fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
                 }
+            } else {
 
+                cmdstr = fmt.Sprintf("ip xfrm policy delete dir in src %s/%d dst %s/%d", srcip.String(), srcipmask, dstip.String(), dstipmask)
+                cmd = exec.Command("bash", "-c", cmdstr)
+                err = cmd.Run()
+                if err != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                }
+                cmdstr = fmt.Sprintf("ip xfrm policy delete dir fwd src %s/%d dst %s/%d", srcip.String(), srcipmask, dstip.String(), dstipmask)
+                cmd = exec.Command("bash", "-c", cmdstr)
+                err = cmd.Run()
+                if err != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                }
             }
         }
     }
