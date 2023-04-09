@@ -458,8 +458,14 @@ func syncCfg_lbside(serverId uint64) {
 	}
 }
 
+// TODO: currently if one command failed, we can do nothing but continue,
+// we should batch all command together, and if failed, revert that one
+// then return with fail(not uptodate), and hb will also return fail until
+// we fixed or reboot
+// maybe add a interface to get internal info of map && state for debug and monitor
 func subnet_installroute(icfgs []config.VerCfg) error {
     var err error
+    var cmderr error
     for _, icfg := range icfgs {
 
         cfg := icfg.Cfg
@@ -481,54 +487,53 @@ func subnet_installroute(icfgs []config.VerCfg) error {
             spi := sareq.GetSpi()
 
             var outflow bool = false
-            if _, err = util.GetIntfFromAddr(tmplsrcip.String()); err == nil {
+            if _, cmderr = util.GetIntfFromAddr(tmplsrcip.String()); cmderr == nil {
                 // we are sending out
                 outflow = true
             }
-            err = nil
 
             fmt.Printf("out: %v, cfg client received add ver %d, op %s, src:%s/%d, dst:%s/%d,tmplsrc %s, tmpldst %s, spi:0x%x\n", outflow, icfg.Ver, config.Gmap[op], srcip.String(), srcipmask, dstip.String(), dstipmask, tmplsrcip.String(), tmpldstip.String(), spi)
 
             cmdstr = fmt.Sprintf("ip xfrm state add src %s dst %s proto esp spi 0x%x mode tunnel auth digest_null \"\" enc cipher_null \"\" ", tmplsrcip.String(), tmpldstip.String(), spi)
             cmd := exec.Command("bash", "-c", cmdstr)
-            err = cmd.Run()
-            if err != nil {
-                fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+            cmderr = cmd.Run()
+            if cmderr != nil {
+                fmt.Printf("cmd '%s' result %v\n", cmdstr, cmderr)
             }
             if outflow {
                 cmdstr = fmt.Sprintf("ip xfrm policy add src %s/%d dst %s/%d dir out ptype main tmpl src %s dst %s proto esp mode tunnel ", srcip.String(), srcipmask, dstip.String(), dstipmask, tmplsrcip.String(), tmpldstip.String())
                 cmd = exec.Command("bash", "-c", cmdstr)
-                err = cmd.Run()
-                if err != nil {
-                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                cmderr = cmd.Run()
+                if cmderr != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, cmderr)
                 }
 
                 // we are adding for local esp, so add outer route
                 cmdstr = fmt.Sprintf("ip rule add to %s/%d table 15", dstip.String(), dstipmask)
                 cmd = exec.Command("bash", "-c", cmdstr)
-                err = cmd.Run()
-                if err != nil {
-                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                cmderr = cmd.Run()
+                if cmderr != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, cmderr)
                 }
                 cmdstr = fmt.Sprintf("ip route add %s/%d dev %s table 15", dstip.String(), dstipmask, *subOuterIntf)
                 cmd = exec.Command("bash", "-c", cmdstr)
-                err = cmd.Run()
-                if err != nil {
-                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                cmderr = cmd.Run()
+                if cmderr != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, cmderr)
                 }
             } else {
                 // already switched when c cide send, so need not switch here
                 cmdstr = fmt.Sprintf("ip xfrm policy add src %s/%d dst %s/%d dir in ptype main tmpl src %s dst %s proto esp mode tunnel ", srcip.String(), srcipmask, dstip.String(), dstipmask, tmplsrcip.String(), tmpldstip.String())
                 cmd = exec.Command("bash", "-c", cmdstr)
-                err = cmd.Run()
-                if err != nil {
-                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                cmderr = cmd.Run()
+                if cmderr != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, cmderr)
                 }
                 cmdstr = fmt.Sprintf("ip xfrm policy add src %s/%d dst %s/%d dir fwd ptype main tmpl src %s dst %s proto esp mode tunnel ", srcip.String(), srcipmask, dstip.String(), dstipmask, tmplsrcip.String(), tmpldstip.String())
                 cmd = exec.Command("bash", "-c", cmdstr)
-                err = cmd.Run()
-                if err != nil {
-                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                cmderr = cmd.Run()
+                if cmderr != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, cmderr)
                 }
             }
         } else if cfg.Op == config.OP_DEL_SA {
@@ -547,54 +552,53 @@ func subnet_installroute(icfgs []config.VerCfg) error {
             spi := sareq.GetSpi()
 
             var outflow bool = false
-            if _, err = util.GetIntfFromAddr(tmplsrcip.String()); err == nil {
+            if _, cmderr = util.GetIntfFromAddr(tmplsrcip.String()); cmderr == nil {
                 // we are sending out
                 outflow = true
             }
-            err = nil
 
             fmt.Printf("out: %v, cfg client received delete ver %d spi:0x%x src %s/%d dst %s/%d\n", outflow, icfg, spi, srcip.String(), srcipmask, dstip.String(), dstipmask)
 
             cmdstr = fmt.Sprintf("ip xfrm state delete spi 0x%x src %s dst %s proto esp", spi, tmplsrcip.String(), tmpldstip.String())
             cmd := exec.Command("bash", "-c", cmdstr)
-            err = cmd.Run()
-            if err != nil {
-                fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+            cmderr = cmd.Run()
+            if cmderr != nil {
+                fmt.Printf("cmd '%s' result %v\n", cmdstr, cmderr)
             }
 
             if outflow {
                 cmdstr = fmt.Sprintf("ip xfrm policy delete dir out src %s/%d dst %s/%d", srcip.String(), srcipmask, dstip.String(), dstipmask)
                 cmd = exec.Command("bash", "-c", cmdstr)
-                err = cmd.Run()
-                if err != nil {
-                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                cmderr = cmd.Run()
+                if cmderr != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, cmderr)
                 }
                 // we are adding for local esp, so add outer route
                 cmdstr = fmt.Sprintf("ip rule del to %s/%d table 15", dstip.String(), dstipmask)
                 cmd = exec.Command("bash", "-c", cmdstr)
-                err = cmd.Run()
-                if err != nil {
-                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                cmderr = cmd.Run()
+                if cmderr != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, cmderr)
                 }
                 cmdstr = fmt.Sprintf("ip route del %s/%d dev %s table 15", dstip.String(), dstipmask, *subOuterIntf)
                 cmd = exec.Command("bash", "-c", cmdstr)
-                err = cmd.Run()
-                if err != nil {
-                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                cmderr = cmd.Run()
+                if cmderr != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, cmderr)
                 }
             } else {
 
                 cmdstr = fmt.Sprintf("ip xfrm policy delete dir in src %s/%d dst %s/%d", srcip.String(), srcipmask, dstip.String(), dstipmask)
                 cmd = exec.Command("bash", "-c", cmdstr)
-                err = cmd.Run()
-                if err != nil {
-                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                cmderr = cmd.Run()
+                if cmderr != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, cmderr)
                 }
                 cmdstr = fmt.Sprintf("ip xfrm policy delete dir fwd src %s/%d dst %s/%d", srcip.String(), srcipmask, dstip.String(), dstipmask)
                 cmd = exec.Command("bash", "-c", cmdstr)
-                err = cmd.Run()
-                if err != nil {
-                    fmt.Printf("cmd '%s' result %v\n", cmdstr, err)
+                cmderr = cmd.Run()
+                if cmderr != nil {
+                    fmt.Printf("cmd '%s' result %v\n", cmdstr, cmderr)
                 }
             }
         }
